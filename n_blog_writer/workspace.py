@@ -9,10 +9,17 @@ from playwright.sync_api import BrowserContext, Frame, Page
 
 from browser import launch_context
 from config import Account, load_account
-from naver_blog import go_to_blog, open_writer
+from naver_blog import go_to_blog, open_writer, write_post
 from naver_login import login
 
 LogFn = Callable[[str], None]
+
+# 임시 샘플. 나중에 생성기/입력값으로 교체할 자리.
+SAMPLE_TITLE = "오늘의 기록"
+SAMPLE_BODY = """아침에 창문을 여니 공기가 제법 선선해졌습니다.
+여름이 길었던 만큼 이런 바람이 더 반갑네요.
+별일 없는 하루였지만, 별일 없다는 게 요즘은 꽤 괜찮은 일 같습니다.
+내일도 이 정도면 충분하겠습니다."""
 
 
 class Workspace:
@@ -52,8 +59,14 @@ class Workspace:
         )
 
     def write_post(self) -> None:
-        """제목/본문 입력 및 발행 (다음 단계에서 구현)."""
-        self.log("글 작성 기능은 아직 준비 중입니다.")
+        """제목/본문을 입력한다. 발행은 아직 하지 않는다."""
+        write_post(
+            self.writer_page,
+            self.editor,
+            SAMPLE_TITLE,
+            SAMPLE_BODY,
+            log=self.log,
+        )
 
     # ------------------------------------------------------------------
     # 실행 흐름
@@ -68,7 +81,8 @@ class Workspace:
                 self.do_login()
                 self.open_blog()
                 self.open_writer_tab()
-                self.log("작업 준비 완료. 중지를 누르면 브라우저를 닫습니다.")
+                self.write_post()
+                self.log("작성 완료. 발행은 직접 눌러 주세요. 중지를 누르면 브라우저를 닫습니다.")
 
                 # 중지 신호가 올 때까지 브라우저를 열어 둔다.
                 self.stop_event.wait()

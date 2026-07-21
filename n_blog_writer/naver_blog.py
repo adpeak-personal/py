@@ -1,7 +1,8 @@
 """네이버 블로그 진입 및 글 작성."""
+import random
 import time
 from typing import Callable, Tuple
-
+import pyautogui as pg
 from playwright.sync_api import (
     BrowserContext,
     Frame,
@@ -19,6 +20,22 @@ MY_BLOG_MENU = ".menu_my_blog"
 WRITE_INDEX = 1  # 내 블로그 / 글쓰기 순서 (0-based)
 EDITOR_FRAME = "mainFrame"
 WRITE_FORM_PATH = "PostWriteForm.naver"
+
+# 글쓰기 탭은 로딩 화면을 한 번 거친 뒤 에디터로 바뀐다.
+# 그 전에 프레임을 찾으면 로딩 화면 쪽을 잡아버리므로 먼저 좀 기다린다.
+EDITOR_SETTLE_SEC = 3
+
+# 에디터 진입 직후 뜨는 '이전 작성글 복구' 팝업
+POPUP_CONTAINER = ".se-popup-container"
+POPUP_CANCEL = ".se-popup-button.se-popup-button-cancel"
+HELP_CLOSE = ".se-help-panel-close-button"
+
+# 제목과 본문. 둘 다 se-component 지만 제목만 se-documentTitle 이 붙는다.
+TITLE_AREA = ".se-component.se-documentTitle .se-text-paragraph"
+BODY_AREA = ".se-component.se-text .se-text-paragraph"
+
+# 글자 하나 사이의 대기 시간(초). 너무 균일하면 봇으로 본다.
+TYPE_DELAY = (0.3, 0.9)
 
 
 def go_to_blog(context: BrowserContext, page: Page, log: LogFn = print) -> Page:
@@ -70,6 +87,7 @@ def editor_frame(writer: Page, timeout: float = 20.0) -> Frame:
     iframe 태그가 붙은 직후에는 프레임이 아직 등록되지 않아
     page.frame() 이 None 을 돌려준다. 잡힐 때까지 폴링한다.
     """
+    time.sleep(EDITOR_SETTLE_SEC)
     writer.wait_for_selector(f"iframe#{EDITOR_FRAME}", timeout=timeout * 1000)
 
     deadline = time.time() + timeout
@@ -103,12 +121,63 @@ def prepare_writer(writer: Page, log: LogFn = print) -> Frame:
 
     팝업들이 모두 mainFrame 안에 있어서 페이지가 아니라 프레임에서 찾아야 한다.
     """
+
     frame = editor_frame(writer)
     frame.wait_for_selector(".se-documentTitle", timeout=15000)
 
-    # 이전 작성분 복구 팝업 -> '취소' (새 글로 시작)
-    _dismiss(frame, ".se-popup-button-cancel", "이전 작성글 복구 팝업 닫음", log, 3000)
+    # 팝업이 떠 있으면 '취소' 를 눌러 새 글로 시작한다.
+    popup = frame.locator(POPUP_CONTAINER).first
+    try:
+        popup.wait_for(state="visible", timeout=3000)
+    except PWTimeout:
+        pass
+    else:
+        popup.locator(POPUP_CANCEL).first.click()
+        log("팝업 닫음 (취소)")
+
     # 도움말 레이어
-    _dismiss(frame, ".se-help-panel-close-button", "도움말 레이어 닫음", log, 2000)
+    _dismiss(frame, HELP_CLOSE, "도움말 레이어 닫음", log, 2000)
 
     return frame
+
+
+def _pause() -> None:
+    """사람이 치는 것처럼 보이도록 매번 다른 시간을 쉰다."""
+    time.sleep(random.uniform(*TYPE_DELAY))
+
+
+def _type_text(writer: Page, frame: Frame, selector: str, text: str) -> None:
+    """에디터 영역을 클릭한 뒤 한 글자씩 입력한다.
+
+    contenteditable 이라 fill() 이 안 먹는다. 줄 끝마다 엔터를 눌러
+    다음 줄로 넘어간다. 키 입력은 프레임이 아니라 페이지에 보낸다.
+    """
+    target = frame.locator(selector).first
+    target.wait_for(state="visible", timeout=10000)
+    target.click()
+    _pause()
+
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        for ch in line:
+            writer.keyboard.type(ch)
+            _pause()
+
+        # 마지막 줄 뒤에는 빈 줄을 만들지 않는다.
+        if i < len(lines) - 1:
+            writer.keyboard.press("Enter")
+            _pause()
+
+
+def write_post(
+    writer: Page, frame: Frame, title: str, body: str, log: LogFn = print
+) -> None:
+    """제목과 본문을 입력한다. 발행은 하지 않는다."""
+    log(f"제목 입력 중: {title}")
+    _type_text(writer, frame, TITLE_AREA, title)
+
+    lines = len(body.splitlines())
+    log(f"본문 입력 중: {lines}줄")
+    _type_text(writer, frame, BODY_AREA, body)
+
+    log("작성 완료")
