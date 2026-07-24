@@ -3,6 +3,7 @@
 GUI(main.py)는 여기 있는 Workspace 를 별도 스레드에서 돌리기만 한다.
 """
 import threading
+from pathlib import Path
 from typing import Callable, Optional
 
 from playwright.sync_api import BrowserContext, Frame, Page
@@ -14,12 +15,18 @@ from naver_login import login
 
 LogFn = Callable[[str], None]
 
+# 본문의 img_line 마커가 참조할 파일들이 놓인 폴더.
+SAMPLE_IMAGE_DIR = Path(__file__).parent / "sample_image"
+
 # 임시 샘플. 나중에 생성기/입력값으로 교체할 자리.
 SAMPLE_TITLE = "오늘의 기록"
 SAMPLE_BODY = """아침에 창문을 여니 공기가 제법 선선해졌습니다.
 여름이 길었던 만큼 이런 바람이 더 반갑네요.
+img_line|11111111111111111.jpg
 별일 없는 하루였지만, 별일 없다는 게 요즘은 꽤 괜찮은 일 같습니다.
-내일도 이 정도면 충분하겠습니다."""
+내일도 이 정도면 충분하겠습니다.
+link_line|https://www.naver.com|네이버
+"""
 
 
 class Workspace:
@@ -65,6 +72,7 @@ class Workspace:
             self.editor,
             SAMPLE_TITLE,
             SAMPLE_BODY,
+            SAMPLE_IMAGE_DIR,
             log=self.log,
         )
 
