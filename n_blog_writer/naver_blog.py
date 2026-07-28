@@ -39,6 +39,9 @@ BODY_AREA = ".se-component.se-text .se-text-paragraph"
 # 글자 하나 사이의 대기 시간(초). 너무 균일하면 봇으로 본다.
 TYPE_DELAY = (0.05, 0.35)
 
+# 섹션 전환(제목 → 본문 클릭 → 본문 타이핑) 사이의 여유 대기.
+SECTION_DELAY = (1.5, 2.5)
+
 # SE 상단 툴바(.se-toolbar.se-document-toolbar) 내부의 li 들이 각각 툴바 버튼이며,
 # 첫 번째 li 가 이미지 삽입이다. 클릭하면 OS 파일 열기 다이얼로그가 뜬다.
 IMAGE_BUTTON = ".se-toolbar.se-document-toolbar li:first-child"
@@ -174,6 +177,11 @@ def prepare_writer(writer: Page, log: LogFn = print) -> Frame:
 def _pause() -> None:
     """사람이 치는 것처럼 보이도록 매번 다른 시간을 쉰다."""
     time.sleep(random.uniform(*TYPE_DELAY))
+
+
+def _section_pause() -> None:
+    """제목/본문 클릭/본문 타이핑 등 큰 단계 사이의 여유 대기."""
+    time.sleep(random.uniform(*SECTION_DELAY))
 
 
 def _type_text(writer: Page, frame: Frame, selector: str, text: str) -> None:
@@ -411,7 +419,9 @@ def _type_body(
 
     # 본문 전체 가운데 정렬 (한 번 켜두면 이후 문단도 따라간다)
     writer.keyboard.press("Control+Alt+c")
-    _pause()
+
+    # 정렬 반영이 눈에 보일 시간, 그리고 사람이 잠깐 생각하는 척.
+    _section_pause()
 
     lines = body.splitlines()
     for i, line in enumerate(lines):
@@ -452,6 +462,9 @@ def write_post(
     """제목과 본문을 입력한다. 발행은 하지 않는다."""
     log(f"제목 입력 중: {title}")
     _type_text(writer, frame, TITLE_AREA, title)
+
+    # 제목 → 본문 이동 전 잠깐 쉼.
+    _section_pause()
 
     lines = len(body.splitlines())
     log(f"본문 입력 중: {lines}줄")
