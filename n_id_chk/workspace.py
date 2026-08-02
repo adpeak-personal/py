@@ -9,6 +9,7 @@
 """
 
 import random
+from datetime import datetime, timedelta
 
 import pyautogui as pg
 from playwright.sync_api import sync_playwright
@@ -79,18 +80,21 @@ def _login_and_check(p, acc, ua, log):
 # --- 배치 실행 -------------------------------------------------------------
 
 def run_batch(days=DEFAULT_DAYS, log=print):
-    """대상 계정 전체를 IP 변경하며 로그인 체크."""
+    """대상 계정 전체를 IP 변경하며 로그인 체크 후 DB 반영."""
     log(f"=== 로그인 체크 배치 시작 (기준: {days}일) ===")
 
     # 1) 대상 목록 + UA 목록 미리 확보 (IP 변경 전, 네트워크 정상일 때)
-    targets = func.fetch_login_targets(days)
+    before = datetime.now() - timedelta(days=days)
+    targets = func.fetch_login_targets(before)
     uas = func.fetch_user_agents()
     log(f"대상 계정: {len(targets)}건 / 사용 UA: {len(uas)}개")
     if not targets:
         log("체크할 대상이 없습니다.")
+        pg.alert("대상 계정 없음 — 종료")
         return {"total": 0, "ok": 0, "fail": 0}
     if not uas:
         log("사용 가능한 user_agent 가 없습니다. 중단.")
+        pg.alert("user_agent 없음 — 중단")
         return {"total": len(targets), "ok": 0, "fail": 0}
 
     devices = func.adb_devices()
@@ -100,8 +104,7 @@ def run_batch(days=DEFAULT_DAYS, log=print):
     ok = fail = 0
     with sync_playwright() as p:
         for i, acc in enumerate(targets, 1):
-            log(f"\n[{i}/{len(targets)}] {acc['n_id']} "
-                f"(idx={acc['n_idx']}, 상태={acc['n_status']})")
+            log(f"\n[{i}/{len(targets)}] {acc['n_id']} (idx={acc['n_idx']})")
 
             # 2) IP 변경 (비행기모드 ON→OFF) + 변경 확인. 폰 없으면 스킵.
             if devices:
@@ -123,10 +126,13 @@ def run_batch(days=DEFAULT_DAYS, log=print):
                 success = False
                 log(f"    [오류] 로그인 중 예외: {e}")
 
-            # 4) 결과 저장 (IP 변경 후이므로 네트워크 복구된 상태, 자체 재연결)
+            # 4) 결과 저장 — 성공: last_login_chk=NOW() / 실패: use_status=0
             try:
                 func.update_login_result(acc["n_idx"], success)
-                log(f"    DB 기록: login_chk={int(success)}, last_login_chk=NOW()")
+                if success:
+                    log(f"    DB 기록: last_login_chk=NOW()")
+                else:
+                    log(f"    DB 기록: use_status=0 (비활성 처리)")
             except Exception as e:
                 log(f"    [오류] DB 기록 실패: {e}")
 
@@ -134,4 +140,5 @@ def run_batch(days=DEFAULT_DAYS, log=print):
             fail += int(not success)
 
     log(f"\n=== 완료: 총 {len(targets)}건 / 성공 {ok} / 실패 {fail} ===")
+    pg.alert(f"완료\n총 {len(targets)}건\n성공 {ok} / 실패 {fail}")
     return {"total": len(targets), "ok": ok, "fail": fail}

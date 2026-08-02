@@ -179,22 +179,22 @@ def connect_db(retries=4, delay=2.0):
     raise last
 
 
-def fetch_login_targets(days):
+def fetch_login_targets(before):
     """로그인 체크 대상 조회.
 
     - last_login_chk 가 비어있거나(첫 기록)
-    - days 일보다 오래된 계정만
-    (사용 가능 n_use=1 인 것 대상)
+    - before 시각보다 오래된 계정만
+    (사용 가능 use_status=1 인 것 대상)
     """
     conn = connect_db()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT n_idx, n_id, n_pwd, n_status FROM nwork "
-                "WHERE n_use=1 AND (last_login_chk IS NULL "
-                "   OR last_login_chk < (NOW() - INTERVAL %s DAY)) "
+                "SELECT n_idx, n_id, n_pwd FROM nwork "
+                "WHERE use_status=1 AND (last_login_chk IS NULL "
+                "   OR last_login_chk < %s) "
                 "ORDER BY n_idx",
-                (days,),
+                (before,),
             )
             return cur.fetchall()
     finally:
@@ -213,14 +213,20 @@ def fetch_user_agents():
 
 
 def update_login_result(n_idx, success):
-    """로그인 성공/실패와 마지막 접속시간(서버 NOW())을 기록. (자체 연결)"""
+    """성공 → last_login_chk=NOW(). 실패 → use_status=0(비활성). (자체 연결)"""
     conn = connect_db()
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE nwork SET login_chk=%s, last_login_chk=NOW() WHERE n_idx=%s",
-                (1 if success else 0, n_idx),
-            )
+            if success:
+                cur.execute(
+                    "UPDATE nwork SET last_login_chk=NOW() WHERE n_idx=%s",
+                    (n_idx,),
+                )
+            else:
+                cur.execute(
+                    "UPDATE nwork SET use_status=0 WHERE n_idx=%s",
+                    (n_idx,),
+                )
         conn.commit()
     finally:
         conn.close()

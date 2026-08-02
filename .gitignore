@@ -1,10 +1,8 @@
 .env
 .venv
+
 .claude/
 __pycache__/
-n_blog_writer/blog/
-.claude\
-__pycache__\
-n_blog_writer\blog\
 sample_image/
-n_blog_writer/output/
+blog/
+output/
