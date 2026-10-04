@@ -1,0 +1,3 @@
+pyinstaller.exe -F -n=BlogAuto_mix --icon=Blog_icon-icons.com_53707.ico main.py
+
+pyinstaller.exe -F main.py
