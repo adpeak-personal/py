@@ -2,8 +2,10 @@
 
 노트북 한 대에서 두 프로그램을 하나의 프로세스로 돌린다.
   - dgn/ : 당근광고 스프레드시트 → 각 사이트 서버 (5분마다)      ← 원본 ../dgn_scrap/daagn
-  - atb/ : 부동산 공공데이터 → 공용 DB (하루 1번씩, 시각 지정)   ← 원본 ../atb-program 의 수집 CLI
-원본 두 폴더는 건드리지 않고, 필요한 파일만 복사해 와서 독립적으로 돈다.
+  - atb/ : 부동산 공공데이터 → 공용 DB (하루 1번씩, 시각 지정)   ← 원본 all_that_realestate/atb-program
+원본은 건드리지 않고, 필요한 파일만 복사해 와서 독립적으로 돈다.
+atb/services·run_*.py 는 원본과 바이트 단위로 같게 유지한다 — 한쪽만 고치면
+어느 것이 도는지 헷갈린다.
 
 각 작업은 자식 프로세스로 실행한다 — 실행기가 자기 자신을 `--job <키>` 로 다시 띄운다
 (worker.py). exe 로 묶어도 파이썬 없이 돌고, K-apt 처럼 몇 시간 걸리는 작업이
@@ -460,5 +462,6 @@ def preflight() -> list[str]:
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     if r.returncode == 0:
         warns.append("작업 스케줄러에 AllThat 작업이 등록돼 있습니다 — "
-                     "원본 atb-program/scheduler/unregister_tasks.bat 로 지워야 중복 실행이 안 됩니다")
+                     "all_that_realestate/atb-program/scheduler/unregister_tasks.bat 로 "
+                     "지워야 중복 실행이 안 됩니다")
     return warns
