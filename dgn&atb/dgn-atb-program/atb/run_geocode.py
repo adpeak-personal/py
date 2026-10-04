@@ -67,6 +67,7 @@ def main(argv: list[str]) -> int:
 
     gc = geocode.default_geocoder()
     ok = notfound = failed = 0
+    quota = False
 
     for i, row in enumerate(rows, 1):
         addr = (row["address"] or "").strip()
@@ -86,6 +87,7 @@ def main(argv: list[str]) -> int:
             print(f"\n✗ {e}")
             print(f"  {i - 1}/{total} 처리 후 중단. 받은 좌표는 저장됨.")
             print("  한도가 초기화되면 같은 명령을 다시 실행하면 이어서 받는다.")
+            quota = True
             break
         except geocode.GeocodeNotFound:
             db.mark_geocode_failed(row["id"], 2)
@@ -105,7 +107,8 @@ def main(argv: list[str]) -> int:
     print(f"\n→ 성공 {ok} / 주소 못찾음 {notfound} / 오류 {failed}")
     if failed:
         print("  오류 건은 다음 실행에서 자동 재시도된다.")
-    return 0
+    # 2 = 일일 한도. 통합 실행기가 "오늘은 끝" 으로 보고 재시도하지 않는다.
+    return 2 if quota else 0
 
 
 if __name__ == "__main__":

@@ -168,7 +168,10 @@ CONFLICT = "conflict"      # 이름과 지번이 서로 다른 단지를 가리�
 UNMATCHED = "unmatched"    # 후보 없음 (K-apt 미등록 추정)
 
 # apartments.match_status 정수 코드 (000_atb_db.sql 과 일치)
-STATUS_CODE = {UNMATCHED: 0, CONFIRMED: 1, MATCHED: 2, AMBIGUOUS: 3, CONFLICT: 4}
+# 0 은 '아직 매칭을 안 해봤다' 는 뜻으로 비워 둔다. 예전에는 UNMATCHED 도 0 이어서
+# K-apt 에 없는 단지(오피스텔·도시형생활주택 등)를 매일 다시 매칭했다 —
+# 하루 두 시간을 쓰고 결과는 늘 같았다.
+STATUS_CODE = {CONFIRMED: 1, MATCHED: 2, AMBIGUOUS: 3, CONFLICT: 4, UNMATCHED: 5}
 
 
 @dataclass

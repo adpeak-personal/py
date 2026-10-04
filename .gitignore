@@ -6,3 +6,21 @@ __pycache__/
 sample_image/
 blog/
 output/
+# 비밀값 — 커밋 금지
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+*_deploy
+*_tunnel
+# ssh-keygen 이 만든 개인키 (파일명이 뭐든)
+**/*OPENSSH*
+token*.json
+daggn-*.json
+
+# 대용량 보관 파일
+_archive_*.zip
+
+# 개인키 (ssh-keygen 저장 경로를 잘못 입력해 생긴 파일)
+Zp.8a(BD{eSmEiiw
+Zp.8a(BD{eSmEiiw.pub

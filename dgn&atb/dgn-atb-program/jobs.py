@@ -78,15 +78,21 @@ JOBS: list[Job] = [
     Job("dgn", "당근광고 시트 → 서버", "dgn",
         lambda: [], every_min=5, timeout_min=10),
     # 실거래 → 좌표 → 분양 → K-apt(매칭) 순. 새로 생긴 단지가 같은 날 좌표·매칭까지 이어진다.
+    #
+    # timeout_min 은 반드시 둔다. atb 는 한 번에 하나만 도는데, 한 작업이 네트워크에서
+    # 멈추면 proc.wait() 가 영구히 기다리고 그룹이 계속 '사용 중' 으로 남아 나머지 세
+    # 작업도 그날부터 전부 멈춘다. 화면에는 '실행 중…' 만 떠 있어 알아채기 어렵다.
+    # 실제 소요의 2~3배로 넉넉히 두되, 다음 날 03:00 전에는 끝나게 한다.
     Job("trades", "아파트 실거래가", "atb",
-        lambda: ["--all", _recent_months()], daily_at="03:00"),
+        lambda: ["--all", _recent_months()], daily_at="03:00", timeout_min=240),
     Job("geocode", "단지 좌표 변환", "atb",
-        lambda: ["--delay", "0.3"], daily_at="04:00"),
+        lambda: ["--delay", "0.3"], daily_at="04:00", timeout_min=180),
     Job("presale", "청약홈 분양공고", "atb",
-        lambda: ["--recent"], daily_at="06:00"),
-    # K-apt 포털이 새벽엔 전부 HTTP_ERROR 를 돌려줘서 낮에 돌린다
+        lambda: ["--recent"], daily_at="06:00", timeout_min=120),
+    # K-apt 포털이 새벽엔 전부 HTTP_ERROR 를 돌려줘서 낮에 돌린다.
+    # 30일 캐시가 만료되는 날은 전국을 다시 받아 몇 시간이 걸린다 — 7시간을 준다.
     Job("kapt", "K-apt 단지 동기화", "atb",
-        lambda: ["--all"], daily_at="09:00"),
+        lambda: ["--all"], daily_at="09:00", timeout_min=420),
 ]
 
 
@@ -111,6 +117,47 @@ def _port_open(port: int) -> bool:
         return s.connect_ex(("127.0.0.1", port)) == 0
 
 
+def _no_window() -> int:
+    return getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _listening_pids(port: int) -> set[str]:
+    """127.0.0.1:port 를 LISTEN 중인 프로세스 PID."""
+    try:
+        out = subprocess.run(["netstat", "-ano", "-p", "tcp"], capture_output=True, text=True,
+                             creationflags=_no_window()).stdout
+    except OSError:
+        return set()
+    pids = set()
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0] == "TCP" and parts[3] == "LISTENING" \
+                and parts[1].endswith(f":{port}"):
+            pids.add(parts[4])
+    return pids
+
+
+def _kill_stale_ssh(port: int) -> bool:
+    """포트를 쥔 ssh 를 끈다. 하나라도 껐으면 True.
+
+    실행기를 작업관리자로 끄거나 전원이 나가면 stop() 이 못 돌아 자식 ssh 가 남는다.
+    ssh.exe 일 때만 끈다 — 남의 프로세스는 건드리지 않는다.
+    """
+    killed = False
+    for pid in _listening_pids(port):
+        try:
+            info = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                                  capture_output=True, text=True, creationflags=_no_window()).stdout
+        except OSError:
+            continue
+        if "ssh.exe" not in info.lower():
+            continue
+        subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True,
+                       creationflags=_no_window())
+        killed = True
+    return killed
+
+
 class SshTunnel:
     """공용 DB 로 가는 SSH 포트 포워딩. atb/.env 에 SSH_HOST 가 있을 때만 쓴다.
 
@@ -130,6 +177,29 @@ class SshTunnel:
     def enabled(self) -> bool:
         return bool(self.host)
 
+    def _log(self, msg: str):
+        LOG_DIR.mkdir(exist_ok=True)
+        with open(LOG_DIR / "ssh-tunnel.log", "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}\n")
+
+    def _reclaim_port(self) -> bool:
+        """앞선 실행이 남긴 ssh 가 쥔 포트를 되찾는다. 비었으면 True.
+
+        정리하지 않으면 ExitOnForwardFailure 로 새 터널이 바로 죽고, ensure() 는
+        포트가 열려 있는데도 계속 False 를 돌려준다 — 수집이 영구히 멈춘다.
+        """
+        if not _kill_stale_ssh(self.local_port):
+            self._log(f"127.0.0.1:{self.local_port} 를 ssh 아닌 프로그램이 쓰고 있다 — 터널 불가")
+            return False
+        end = time.time() + 5
+        while time.time() < end:
+            if not _port_open(self.local_port):
+                self._log("앞선 실행이 남긴 ssh 를 정리했다")
+                return True
+            time.sleep(0.3)
+        self._log("ssh 를 끝냈지만 포트가 아직 열려 있다")
+        return False
+
     def ensure(self, timeout: float = 15) -> bool:
         """터널이 살아 있으면 True. 죽어 있으면 다시 띄우고 포트가 열릴 때까지 기다린다."""
         if not self.enabled:
@@ -137,6 +207,9 @@ class SshTunnel:
         if self.proc and self.proc.poll() is None and _port_open(self.local_port):
             return True
         self.close()
+        # 내 자식이 아닌데 포트가 열려 있다 = 앞선 실행이 남긴 ssh
+        if _port_open(self.local_port) and not self._reclaim_port():
+            return False
         cmd = ["ssh", "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
                "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=3",
                "-o", "StrictHostKeyChecking=accept-new",

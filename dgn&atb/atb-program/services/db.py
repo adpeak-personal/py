@@ -371,13 +371,25 @@ def get_kapt_master(sgg_cd: int) -> list[dict]:
 
 
 # ─── 매칭 결과 반영 (apartments) ───────────────────────────────────────────────
+# K-apt 에 없던 단지를 다시 매칭해 보는 간격. 마스터에 새 단지가 올라오면 그때
+# 붙을 수 있으니 아주 버리지는 않되, 매일 같은 결과를 다시 내게 하지도 않는다.
+REMATCH_AFTER_DAYS = 7
+
+
 def get_unmatched_apartments(sgg_cd: int | None = None) -> list[dict]:
-    """미매칭(match_status=0) 단지 [{id, apt_nm, umd_nm, jibun}, ...]."""
-    sql = ("SELECT id, apt_nm, umd_nm, jibun FROM apartments WHERE match_status = 0")
-    params: tuple = ()
+    """매칭할 단지 [{id, apt_nm, umd_nm, jibun}, ...].
+
+    두 가지를 집는다.
+      - match_status=0 : 아직 한 번도 매칭을 안 해본 단지
+      - match_status=5 : 해봤지만 K-apt 에 없던 단지 — REMATCH_AFTER_DAYS 마다 한 번
+    """
+    sql = ("SELECT id, apt_nm, umd_nm, jibun FROM apartments "
+           "WHERE (match_status = 0 OR (match_status = 5 AND (matched_at IS NULL "
+           "       OR matched_at < NOW() - INTERVAL %s DAY)))")
+    params: tuple = (REMATCH_AFTER_DAYS,)
     if sgg_cd is not None:
         sql += " AND sgg_cd = %s"
-        params = (sgg_cd,)
+        params = (REMATCH_AFTER_DAYS, sgg_cd)
     sql += " ORDER BY id"
     conn = _conn()
     try:
@@ -453,10 +465,10 @@ def mark_geocode_failed(apt_id: int, status: int) -> None:
 
 
 def reset_matches(sgg_cd: int | None = None) -> int:
-    """매칭 결과 초기화 (match_status=0). 매처를 개선한 뒤 전량 재매칭할 때 쓴다.
+    """매칭 결과 초기화 (match_status=0 — '안 해봄'). 매처를 개선한 뒤 전량 재매칭할 때 쓴다.
 
-    get_unmatched_apartments() 가 match_status=0 만 집으므로, 초기화 없이는
-    이미 매칭된 단지가 새 로직으로 다시 평가되지 않는다.
+    get_unmatched_apartments() 는 '안 해봄(0)' 과 'K-apt 에 없음(5)' 만 집으므로,
+    초기화 없이는 이미 매칭된 단지가 새 로직으로 다시 평가되지 않는다.
     """
     sql = ("UPDATE apartments SET kapt_code = NULL, match_status = 0, "
            "match_method = NULL, matched_at = NULL")

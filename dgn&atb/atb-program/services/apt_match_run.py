@@ -1,7 +1,8 @@
 """매칭 실행 워커.
 
-kapt_complexes(마스터) 로 AptMatcher 를 만들고, apartments 중 미매칭(match_status=0)
-단지를 이름+지번으로 매칭해 결과를 apartments 에 기록한다.
+kapt_complexes(마스터) 로 AptMatcher 를 만들고, apartments 중 매칭 대상
+(db.get_unmatched_apartments — 안 해본 단지 + K-apt 에 없던 단지의 주기적 재시도)
+을 이름+지번으로 매칭해 결과를 apartments 에 기록한다.
 
 선행: services/kapt_sync.sync_sigungu() 로 kapt_complexes 가 채워져 있어야 한다.
 자동확정(confirmed/matched)만 kapt_code 를 채우고, ambiguous/conflict 는 상태만
