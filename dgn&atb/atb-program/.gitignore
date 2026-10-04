@@ -1,0 +1,15 @@
+# atb-program (Python) 전용
+
+# 환경설정 — 실제 .env 는 커밋 금지, 템플릿은 커밋
+.env
+.env.local
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 모델 가중치 (용량이 커서 별도 배포)
+models/*.pth.tar

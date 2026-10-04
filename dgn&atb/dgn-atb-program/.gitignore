@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+logs/
+build/
+dist/
+
+# 비밀값·인증 — 커밋 금지
+atb/.env
+dgn/daggn-*.json
+dgn/token*.json
+dgn/last_check_time.txt
