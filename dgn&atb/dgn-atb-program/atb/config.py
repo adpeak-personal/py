@@ -53,6 +53,8 @@ MYSQL_DATABASE = env("MYSQL_DATABASE", "test")
 MYSQL_PORT = int(env("MYSQL_PORT", "3306"))
 
 # ─── 엔드포인트 ────────────────────────────────────────────────────────────────
+# 국토교통부는 주택 유형 × 매매/전월세 마다 서비스를 따로 낸다. 서비스명은
+# services/molit.py·rent_api.py 에 두고, 여기서는 쓰던 이름만 유지한다.
 APT_TRADE_BASE_URL = (
     "https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade"
 )

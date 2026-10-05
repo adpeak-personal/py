@@ -1,7 +1,10 @@
-"""MySQL 저장 (atb-back/lib/aptApi.ts 의 saveAptTrades 포팅).
+"""MySQL 저장.
 
-apartments(단지) upsert → apartment_deals(거래) insert → apt_id 연결.
+apartments(단지) upsert → apartment_deals / property_rents insert → apt_id 연결.
 모두 INSERT IGNORE 로 중복 무시.
+
+주택 유형(property_type: APT / OFFI)은 단지와 거래 양쪽에 둔다. 같은 지번에
+같은 이름의 아파트와 오피스텔이 있을 수 있어 단지 유니크 키에도 들어간다.
 """
 from __future__ import annotations
 
@@ -12,6 +15,7 @@ import pymysql
 
 import config
 from services.apt_api import AptTradeItem
+from services.rent_api import RentItem
 
 
 def _conn():
@@ -47,8 +51,16 @@ def _to_int(val, default=None):
         return default
 
 
-def _parse_item(item: AptTradeItem) -> dict:
-    """API 아이템 → DB row dict (TS parseItem 동일)."""
+def _to_area(val):
+    """전용면적. DECIMAL(7,4) 로 들어가므로 수치형으로 만들어 넘긴다."""
+    try:
+        return float(str(val).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _parse_item(item: AptTradeItem, property_type: str = "APT") -> dict:
+    """API 아이템 → DB row dict."""
     amount = _to_int(item.dealAmount, 0)
     y = _to_int(item.dealYear, 0)
     m = _to_int(item.dealMonth, 0)
@@ -57,10 +69,15 @@ def _parse_item(item: AptTradeItem) -> dict:
 
     sgg_cd = item.sggCd or ""
     key_src = f"{sgg_cd}_{item.aptNm}_{item.aptDong}_{deal_date}_{item.floor}_{item.excluUseAr}_{amount}"
+    # 아파트 키는 건드리지 않는다 — 식을 바꾸면 이미 쌓인 61만 건이 전부 새 키가 되어
+    # 다음 수집에서 중복으로 다시 들어온다. 다른 유형만 앞에 유형을 붙인다.
+    if property_type != "APT":
+        key_src = f"{property_type}_{key_src}"
     transaction_key = hashlib.md5(key_src.encode("utf-8")).hexdigest()
 
     return {
         "transaction_key": transaction_key,
+        "property_type": property_type,
         "sgg_cd": _to_int(sgg_cd),
         "umd_nm": item.umdNm,
         "jibun": str(item.jibun or ""),
@@ -86,26 +103,28 @@ def _parse_item(item: AptTradeItem) -> dict:
     }
 
 
-def save_apt_trades(items: list[AptTradeItem]) -> int:
-    """거래 목록 저장. 신규 저장된 거래 건수 반환."""
+def save_apt_trades(items: list[AptTradeItem], property_type: str = "APT") -> int:
+    """매매 거래 목록 저장. 신규 저장된 거래 건수 반환."""
     if not items:
         return 0
 
-    rows = [_parse_item(it) for it in items]
+    rows = [_parse_item(it, property_type) for it in items]
     conn = _conn()
     try:
         with conn.cursor() as cur:
             # 1. 배치 내 unique 단지만 apartments upsert
             seen: set[str] = set()
             for r in rows:
-                key = f"{r['sgg_cd']}_{r['apt_nm']}_{r['jibun']}"
+                key = f"{property_type}_{r['sgg_cd']}_{r['apt_nm']}_{r['jibun']}"
                 if key in seen:
                     continue
                 seen.add(key)
                 cur.execute(
-                    "INSERT IGNORE INTO apartments (sgg_cd, umd_nm, jibun, apt_nm, build_year) "
-                    "VALUES (%s, %s, %s, %s, %s)",
-                    (r["sgg_cd"], r["umd_nm"], r["jibun"], r["apt_nm"], r["build_year"]),
+                    "INSERT IGNORE INTO apartments "
+                    "(property_type, sgg_cd, umd_nm, jibun, apt_nm, build_year) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (property_type, r["sgg_cd"], r["umd_nm"], r["jibun"], r["apt_nm"],
+                     r["build_year"]),
                 )
 
             # 2. apartment_deals INSERT IGNORE (배치)
@@ -125,7 +144,8 @@ def save_apt_trades(items: list[AptTradeItem]) -> int:
             cur.execute(
                 "UPDATE apartment_deals d "
                 "JOIN apartments a "
-                "  ON a.sgg_cd = d.sgg_cd AND a.apt_nm = d.apt_nm "
+                "  ON a.property_type = d.property_type "
+                " AND a.sgg_cd = d.sgg_cd AND a.apt_nm = d.apt_nm "
                 " AND COALESCE(a.jibun, '') = COALESCE(d.jibun, '') "
                 "SET d.apt_id = a.id WHERE d.apt_id IS NULL"
             )
@@ -139,6 +159,116 @@ def save_apt_trades(items: list[AptTradeItem]) -> int:
 
 
 # ─── 전용면적 파생 (apartment_deals → apartments.exclu_areas) ──────────────────
+# ─── 전월세 ───────────────────────────────────────────────────────────────────
+def _parse_rent(item: RentItem, property_type: str) -> dict:
+    """전월세 API 아이템 → property_rents row dict."""
+    y = _to_int(item.dealYear, 0)
+    m = _to_int(item.dealMonth, 0)
+    d = _to_int(item.dealDay, 0)
+    deal_date = f"{y:04d}-{m:02d}-{d:02d}"
+
+    sgg_cd = item.sggCd or ""
+    deposit = _to_int(item.deposit, 0)
+    monthly = _to_int(item.monthlyRent, 0)
+    area = _to_area(item.excluUseAr)
+    floor = _to_int(item.floor)
+    ctype = item.contractType or ""
+    cterm = item.contractTerm or ""
+
+    # 전월세는 등기일·해제일이 없어 매매처럼 키를 만들 수 없다. 계약 조건까지
+    # 넣어 같은 날 같은 호의 같은 조건이면 한 건으로 본다 (사실상 중복신고).
+    key_src = "|".join([
+        property_type, str(sgg_cd), item.houseNm, str(item.jibun or ""), deal_date,
+        str(floor), f"{area:.4f}", str(deposit), str(monthly), ctype, cterm,
+    ])
+
+    return {
+        "transaction_key": hashlib.md5(key_src.encode("utf-8")).hexdigest(),
+        "property_type": property_type,
+        "sgg_cd": _to_int(sgg_cd),
+        "umd_nm": item.umdNm,
+        "jibun": str(item.jibun or ""),
+        "apt_nm": item.houseNm,
+        "build_year": _to_int(item.buildYear),
+        "deal_date": deal_date,
+        "deal_year": y,
+        "deal_month": m,
+        "deal_day": d,
+        "deposit": deposit,
+        "monthly_rent": monthly,
+        "exclu_use_ar": area,
+        "floor": floor,
+        "contract_term": cterm or None,
+        "contract_type": ctype or None,
+        "pre_deposit": _to_int(item.preDeposit),
+        "pre_monthly_rent": _to_int(item.preMonthlyRent),
+        "use_rr_right": item.useRRRight or None,
+    }
+
+
+def save_rents(items: list[RentItem], property_type: str = "APT") -> int:
+    """전월세 목록 저장. 신규 저장된 건수 반환.
+
+    매매가 없는 단지도 단지 마스터에 넣는다 — 안 넣으면 전월세 행이 apt_id 없이
+    떠돌아 단지 화면에서 전세가율을 낼 수 없다. 단지 목록(listApts)은 매매를
+    INNER JOIN 하므로 거래 없는 단지가 목록에 끼지는 않는다.
+    """
+    if not items:
+        return 0
+
+    rows = [_parse_rent(it, property_type) for it in items]
+    # 면적·날짜가 깨진 건은 버린다 (DECIMAL/DATE 에 못 들어간다)
+    rows = [r for r in rows if r["exclu_use_ar"] > 0 and r["deal_year"] > 0 and r["apt_nm"]]
+    if not rows:
+        return 0
+
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            seen: set[str] = set()
+            for r in rows:
+                key = f"{property_type}_{r['sgg_cd']}_{r['apt_nm']}_{r['jibun']}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                cur.execute(
+                    "INSERT IGNORE INTO apartments "
+                    "(property_type, sgg_cd, umd_nm, jibun, apt_nm, build_year) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (property_type, r["sgg_cd"], r["umd_nm"], r["jibun"], r["apt_nm"],
+                     r["build_year"]),
+                )
+
+            # rent_type 은 생성 컬럼이라 넣지 않는다 (monthly_rent 로 자동 계산)
+            columns = list(rows[0].keys())
+            ph = "(" + ",".join(["%s"] * len(columns)) + ")"
+            values: list = []
+            for r in rows:
+                values.extend(r[c] for c in columns)
+            cur.execute(
+                f"INSERT IGNORE INTO property_rents ({','.join(columns)}) VALUES "
+                + ",".join([ph] * len(rows)),
+                values,
+            )
+            saved = cur.rowcount
+
+            cur.execute(
+                "UPDATE property_rents r "
+                "JOIN apartments a "
+                "  ON a.property_type = r.property_type "
+                " AND a.sgg_cd = r.sgg_cd AND a.apt_nm = r.apt_nm "
+                " AND COALESCE(a.jibun, '') = COALESCE(r.jibun, '') "
+                "SET r.apt_id = a.id WHERE r.apt_id IS NULL"
+            )
+        conn.commit()
+        return saved
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def refresh_exclu_areas(sgg_cds: list | None = None) -> int:
     """apartments.exclu_areas 를 그 단지 거래들의 전용면적 종류(JSON 배열)로 갱신.
 

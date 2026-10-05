@@ -1,10 +1,14 @@
-"""아파트 매매 실거래가 수집 (CLI).
+"""매매 실거래가 수집 (CLI) — 아파트·오피스텔.
 
 GUI(main.py) 없이 헤드리스로 도는 수집 워커. 시군구 × 거래월 단위로
 국토교통부 실거래가 API 를 전량 페이지네이션하며 DB 에 저장한다.
 
+유형(--type)은 APT(기본) / OFFI. 유형마다 국토교통부 서비스가 달라 활용신청도
+각각 해야 한다 (신청 안 된 유형은 '등록되지 않은 서비스키' 가 뜬다).
+
 사용:
-  python run_trades.py 11680 202607                 # 강남구 2026년 7월
+  python run_trades.py 11680 202607                 # 강남구 2026년 7월 (아파트)
+  python run_trades.py --type=OFFI 11680 202607     # 같은 조건, 오피스텔
   python run_trades.py 11680 11650 11710 202607     # 여러 시군구, 같은 월
   python run_trades.py 11680 202605-202607          # 강남구 3개월치
   python run_trades.py --all 202607                 # sgg_codes 활성 전체 (256개)
@@ -49,19 +53,29 @@ def _expand_months(token: str) -> list[str]:
     return out
 
 
-def collect(sgg_cd: str, deal_ymd: str) -> int:
+def _opt(argv: list[str], name: str, default: str) -> str:
+    """--name=값 과 --name 값 둘 다 받는다."""
+    for i, a in enumerate(argv):
+        if a == f"--{name}":
+            return argv[i + 1] if i + 1 < len(argv) else default
+        if a.startswith(f"--{name}="):
+            return a.split("=", 1)[1]
+    return default
+
+
+def collect(sgg_cd: str, deal_ymd: str, property_type: str = "APT") -> int:
     """시군구 × 거래월 1건 수집. 저장된(신규) 행 수 반환."""
     saved_total = 0
     page = 1
 
     while True:
-        result = apt_api.fetch_apt_trades(
-            lawd_cd=sgg_cd, deal_ymd=deal_ymd, page_no=page, num_of_rows=1000,
+        result = apt_api.fetch_trades(
+            property_type, lawd_cd=sgg_cd, deal_ymd=deal_ymd, page_no=page, num_of_rows=1000,
         )
         if not result.items:
             break
 
-        saved_total += db.save_apt_trades(result.items)
+        saved_total += db.save_apt_trades(result.items, property_type)
 
         if page * 1000 >= result.totalCount:
             break
@@ -71,11 +85,17 @@ def collect(sgg_cd: str, deal_ymd: str) -> int:
 
 
 def main(argv: list[str]) -> int:
-    flags = {a.strip() for a in argv if a.startswith("--")}
+    flags = {a.split("=")[0].strip() for a in argv if a.startswith("--")}
+    property_type = _opt(argv, "type", "APT").upper()
+    if property_type not in apt_api.SERVICES:
+        print(f"✗ 모르는 유형: {property_type} (가능: {', '.join(apt_api.SERVICES)})")
+        return 1
     # 파이프로 코드를 넘길 때 개행/공백이 섞여 들어오면 API 가
     # '모르는 코드'로 보고 오류 없이 0건을 돌려준다
     # → 조용히 아무것도 수집되지 않는다. 미리 턴다.
-    args = [a.strip() for a in argv if not a.startswith("--") and a.strip()]
+    # --type 의 값이 위치 인자(시군구 코드)로 섞이는 것도 같이 막는다
+    args = [a.strip() for a in argv
+            if not a.startswith("--") and a.strip() and a.strip() != property_type]
 
     months: list[str] = []
     sggs: list[str] = []
@@ -92,7 +112,7 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 1
 
-    print(f"■ 대상: 시군구 {len(sggs)}개 × {len(months)}개월 = {len(sggs) * len(months)}건 요청\n")
+    print(f"■ {property_type} 매매 — 시군구 {len(sggs)}개 × {len(months)}개월 = {len(sggs) * len(months)}건 요청\n")
 
     grand_total = 0
     failed: list[str] = []
@@ -101,7 +121,7 @@ def main(argv: list[str]) -> int:
         for i, sgg in enumerate(sggs, 1):
             label = f"{sgg} {ym}"
             try:
-                saved = collect(sgg, ym)
+                saved = collect(sgg, ym, property_type)
                 grand_total += saved
                 print(f"  [{i}/{len(sggs)}] {label}  저장 {saved}건")
             except Exception as e:

@@ -85,8 +85,17 @@ JOBS: list[Job] = [
     # 멈추면 proc.wait() 가 영구히 기다리고 그룹이 계속 '사용 중' 으로 남아 나머지 세
     # 작업도 그날부터 전부 멈춘다. 화면에는 '실행 중…' 만 떠 있어 알아채기 어렵다.
     # 실제 소요의 2~3배로 넉넉히 두되, 다음 날 03:00 전에는 끝나게 한다.
+    # 전월세는 매매보다 건수가 훨씬 많다 (강남구 한 달에 매매 75건 / 전월세 1,049건).
+    # 매일은 '지난달~이번달' 만 다시 훑는다 — 신고 지연분이 그 사이에 채워진다.
+    # 과거분(최근 3년)은 한 번만 손으로 받는다:  run_rents.py --all --recent
+    Job("rents", "아파트 전월세", "atb",
+        lambda: ["--all", _recent_months()], daily_at="02:00", timeout_min=300),
+    Job("rents-offi", "오피스텔 전월세", "atb",
+        lambda: ["--type=OFFI", "--all", _recent_months()], daily_at="02:40", timeout_min=180),
     Job("trades", "아파트 실거래가", "atb",
         lambda: ["--all", _recent_months()], daily_at="03:00", timeout_min=240),
+    Job("trades-offi", "오피스텔 실거래가", "atb",
+        lambda: ["--type=OFFI", "--all", _recent_months()], daily_at="03:40", timeout_min=180),
     Job("geocode", "단지 좌표 변환", "atb",
         lambda: ["--delay", "0.3"], daily_at="04:00", timeout_min=180),
     Job("presale", "청약홈 분양공고", "atb",

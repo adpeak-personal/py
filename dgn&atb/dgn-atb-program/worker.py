@@ -32,9 +32,12 @@ def run(argv: list[str]) -> int:
 
         sys.path.insert(0, str(ATB_DIR))
         os.chdir(ATB_DIR)
-        # 정적 import 여야 PyInstaller 가 찾아서 묶는다
-        if key == "trades":
+        # 정적 import 여야 PyInstaller 가 찾아서 묶는다.
+        # 유형이 다른 작업(-offi)은 같은 스크립트에 --type 인자로 넘어간다.
+        if key in ("trades", "trades-offi"):
             import run_trades as mod
+        elif key in ("rents", "rents-offi"):
+            import run_rents as mod
         elif key == "geocode":
             import run_geocode as mod
         elif key == "presale":

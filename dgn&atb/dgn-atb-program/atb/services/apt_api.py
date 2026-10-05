@@ -1,12 +1,26 @@
-"""국토교통부 아파트 매매 실거래가 조회 (atb-back/lib/aptApi.ts 포팅)."""
+"""국토교통부 매매 실거래가 조회 (아파트·오피스텔·연립다세대).
+
+유형마다 서비스가 다르지만 필드는 거의 같다 — 단지명 태그만 aptNm / offiNm /
+mhouseNm 으로 갈린다. from_element 가 그걸 aptNm 하나로 모아 담으므로,
+저장·집계 쪽은 유형을 몰라도 된다.
+
+요청·오류·XML 파싱은 services/molit.py 에 모아 두었다 (전월세와 공통).
+"""
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
-import requests
+from services import molit
 
-import config
+# 유형 → 서비스명. 활용신청은 서비스마다 따로 해야 한다.
+SERVICES = {
+    "APT": "RTMSDataSvcAptTrade",
+    "OFFI": "RTMSDataSvcOffiTrade",
+    # 연립다세대는 houseType·landAr 가 더 오고 '단지' 개념이 약해 묶음 규칙을
+    # 따로 정해야 한다. 서비스만 적어 두고 아직 수집하지 않는다.
+    "RH": "RTMSDataSvcRHTrade",
+}
 
 
 @dataclass
@@ -40,6 +54,8 @@ class AptTradeItem:
         raw = {child.tag.strip(): (child.text or "").strip() for child in item_el}
         known = {f for f in cls.__dataclass_fields__ if f != "raw"}
         kwargs = {k: v for k, v in raw.items() if k in known}
+        # 아파트는 aptNm, 오피스텔은 offiNm, 연립다세대는 mhouseNm 으로 온다
+        kwargs["aptNm"] = raw.get("aptNm") or raw.get("offiNm") or raw.get("mhouseNm") or ""
         return cls(raw=raw, **kwargs)
 
 
@@ -51,62 +67,34 @@ class AptTradeResult:
     numOfRows: int
 
 
-class AptApiError(RuntimeError):
-    pass
+AptApiError = molit.MolitApiError
 
 
-def fetch_apt_trades(
+def fetch_trades(
+    property_type: str,
     lawd_cd: str,
     deal_ymd: str,
     page_no: int = 1,
     num_of_rows: int = 100,
     timeout: int = 15,
 ) -> AptTradeResult:
-    """실거래가 조회. lawd_cd=지역코드5자리, deal_ymd=YYYYMM."""
-    if not config.DATA_AUTH_KEY:
-        raise AptApiError(f"DATA_AUTH_KEY 가 설정되지 않았습니다 ({config.ENV_PATH} 확인).")
+    """매매 실거래가 조회. lawd_cd=지역코드5자리, deal_ymd=YYYYMM."""
+    service = SERVICES.get(property_type)
+    if not service:
+        raise AptApiError(f"모르는 유형: {property_type} (가능: {", ".join(SERVICES)})")
 
-    # serviceKey 는 이미 인코딩된 값이라 직접 URL 에 붙인다 (TS 구현과 동일)
-    other = {
-        "LAWD_CD": lawd_cd,
-        "DEAL_YMD": deal_ymd,
-        "pageNo": str(page_no),
-        "numOfRows": str(num_of_rows),
-    }
-    qs = "&".join(f"{k}={v}" for k, v in other.items())
-    url = f"{config.APT_TRADE_BASE_URL}?serviceKey={config.DATA_AUTH_KEY}&{qs}"
-
-    res = requests.get(url, timeout=timeout)
-    if not res.ok:
-        raise AptApiError(f"API 응답 오류: {res.status_code} {res.reason}\n{res.text[:300]}")
-
-    try:
-        root = ET.fromstring(res.text)
-    except ET.ParseError as e:
-        raise AptApiError(f"XML 파싱 실패: {e}\n{res.text[:300]}")
-
-    # OpenAPI 오류 응답 (OpenAPI_ServiceResponse/cmmMsgHeader/errMsg)
-    err = root.find(".//cmmMsgHeader/errMsg")
-    if err is not None and (err.text or "").strip():
-        raise AptApiError(f"API 오류: {err.text.strip()}")
-
-    result_code = root.findtext(".//header/resultCode")
-    if result_code not in (None, "00", "000", "0"):
-        msg = root.findtext(".//header/resultMsg") or "unknown error"
-        raise AptApiError(f"API 오류: [{result_code}] {msg}")
-
-    items = [AptTradeItem.from_element(el) for el in root.findall(".//body/items/item")]
-
-    def to_int(tag: str, default: int = 0) -> int:
-        txt = root.findtext(f".//body/{tag}")
-        try:
-            return int(txt) if txt is not None else default
-        except ValueError:
-            return default
-
-    return AptTradeResult(
-        items=items,
-        totalCount=to_int("totalCount"),
-        pageNo=to_int("pageNo", page_no),
-        numOfRows=to_int("numOfRows", num_of_rows),
+    els, total, page, rows = molit.fetch_items(
+        molit.service_url(service), lawd_cd, deal_ymd, page_no, num_of_rows, timeout
     )
+    return AptTradeResult(
+        items=[AptTradeItem.from_element(el) for el in els],
+        totalCount=total,
+        pageNo=page,
+        numOfRows=rows,
+    )
+
+
+def fetch_apt_trades(lawd_cd: str, deal_ymd: str, page_no: int = 1,
+                     num_of_rows: int = 100, timeout: int = 15) -> AptTradeResult:
+    """아파트 전용 호출 (기존 코드 호환)."""
+    return fetch_trades("APT", lawd_cd, deal_ymd, page_no, num_of_rows, timeout)
