@@ -77,19 +77,37 @@ def _recent_months(years: int) -> list[str]:
 
 
 def collect(property_type: str, sgg_cd: str, deal_ymd: str) -> int:
-    """시군구 × 계약월 1건 수집. 저장된(신규) 행 수."""
-    saved = 0
+    """시군구 × 계약월 1건 수집. 저장된 행 수.
+
+    페이지를 다 모은 뒤 그 달 그 시군구를 통째로 바꿔넣는다. 전월세 API 는 모든
+    필드가 똑같은 행을 여러 건 주는데(등기일·동 번호가 없어 구분이 안 된다),
+    키로 걸러내면 국토교통부 공개 건수보다 적게 쌓인다. 통째로 바꾸면 그쪽
+    건수를 그대로 비추고, 정정·취소도 자동으로 따라온다.
+
+    중간에 한 페이지라도 못 받으면 지우지 않고 채우기만 한다 — 반쪽짜리 목록으로
+    멀쩡한 데이터를 지우면 안 된다.
+    """
+    items = []
+    total = None
     page = 1
     while True:
         res = rent_api.fetch_rents(property_type, sgg_cd, deal_ymd,
                                    page_no=page, num_of_rows=PAGE_ROWS)
+        if total is None:
+            total = res.totalCount
         if not res.items:
             break
-        saved += db.save_rents(res.items, property_type)
+        items.extend(res.items)
         if page * PAGE_ROWS >= res.totalCount:
             break
         page += 1
-    return saved
+
+    if total is not None and len(items) == total:
+        return db.replace_rents(items, property_type, sgg_cd, deal_ymd)
+
+    print(f"  ! {sgg_cd} {deal_ymd}: {len(items)}/{total} 건만 받아 통째 교체를 건너뜀 "
+          f"(지우지 않고 채우기만 함)")
+    return db.save_rents(items, property_type)
 
 
 def main(argv: list[str]) -> int:

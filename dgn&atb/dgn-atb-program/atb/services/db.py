@@ -160,8 +160,15 @@ def save_apt_trades(items: list[AptTradeItem], property_type: str = "APT") -> in
 
 # ─── 전용면적 파생 (apartment_deals → apartments.exclu_areas) ──────────────────
 # ─── 전월세 ───────────────────────────────────────────────────────────────────
-def _parse_rent(item: RentItem, property_type: str) -> dict:
-    """전월세 API 아이템 → property_rents row dict."""
+def _parse_rent(item: RentItem, property_type: str, seq: int = 0) -> dict:
+    """전월세 API 아이템 → property_rents row dict.
+
+    seq 는 '모든 필드가 같은 행' 들을 구분하는 순번이다. 전월세 API 는 등기일도
+    동 번호도 주지 않아서, 같은 날 같은 층 같은 면적 같은 금액인 두 건을 구분할
+    길이 없다 (강남구 2026-09 에 1,000건 중 14건). 그래서 순번까지 키에 넣고,
+    저장은 그 달 그 시군구를 통째로 바꿔넣는 방식으로 멱등을 지킨다
+    (replace_rents 참고).
+    """
     y = _to_int(item.dealYear, 0)
     m = _to_int(item.dealMonth, 0)
     d = _to_int(item.dealDay, 0)
@@ -179,7 +186,7 @@ def _parse_rent(item: RentItem, property_type: str) -> dict:
     # 넣어 같은 날 같은 호의 같은 조건이면 한 건으로 본다 (사실상 중복신고).
     key_src = "|".join([
         property_type, str(sgg_cd), item.houseNm, str(item.jibun or ""), deal_date,
-        str(floor), f"{area:.4f}", str(deposit), str(monthly), ctype, cterm,
+        str(floor), f"{area:.4f}", str(deposit), str(monthly), ctype, cterm, str(seq),
     ])
 
     return {
@@ -206,60 +213,122 @@ def _parse_rent(item: RentItem, property_type: str) -> dict:
     }
 
 
-def save_rents(items: list[RentItem], property_type: str = "APT") -> int:
-    """전월세 목록 저장. 신규 저장된 건수 반환.
+def _rent_rows(items: list[RentItem], property_type: str) -> list[dict]:
+    """아이템 목록 → row 목록. 같은 내용이 겹치면 순번을 올려 키를 다르게 만든다."""
+    seen: dict[str, int] = {}
+    rows: list[dict] = []
+    for it in items:
+        # 순번 0 으로 한 번 만들어 기본 키를 얻고, 이미 본 조합이면 순번을 올려 다시 만든다
+        base = _parse_rent(it, property_type, 0)["transaction_key"]
+        n = seen.get(base, 0)
+        seen[base] = n + 1
+        rows.append(_parse_rent(it, property_type, n))
+    # 면적·날짜·단지명이 깨진 건은 버린다 (DECIMAL/DATE 에 못 들어간다)
+    return [r for r in rows if r["exclu_use_ar"] > 0 and r["deal_year"] > 0 and r["apt_nm"]]
 
-    매매가 없는 단지도 단지 마스터에 넣는다 — 안 넣으면 전월세 행이 apt_id 없이
+
+def _ensure_complexes(cur, rows: list[dict], property_type: str) -> None:
+    """매매가 없는 단지도 단지 마스터에 넣는다 — 안 넣으면 전월세 행이 apt_id 없이
     떠돌아 단지 화면에서 전세가율을 낼 수 없다. 단지 목록(listApts)은 매매를
-    INNER JOIN 하므로 거래 없는 단지가 목록에 끼지는 않는다.
+    INNER JOIN 하므로 거래 없는 단지가 목록에 끼지는 않는다."""
+    seen: set[str] = set()
+    for r in rows:
+        key = f"{property_type}_{r['sgg_cd']}_{r['apt_nm']}_{r['jibun']}"
+        if key in seen:
+            continue
+        seen.add(key)
+        cur.execute(
+            "INSERT IGNORE INTO apartments "
+            "(property_type, sgg_cd, umd_nm, jibun, apt_nm, build_year) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (property_type, r["sgg_cd"], r["umd_nm"], r["jibun"], r["apt_nm"], r["build_year"]),
+        )
+
+
+def _insert_rents(cur, rows: list[dict]) -> int:
+    columns = list(rows[0].keys())          # rent_type 은 생성 컬럼이라 여기 없다
+    ph = "(" + ",".join(["%s"] * len(columns)) + ")"
+    values: list = []
+    for r in rows:
+        values.extend(r[c] for c in columns)
+    cur.execute(
+        f"INSERT IGNORE INTO property_rents ({','.join(columns)}) VALUES "
+        + ",".join([ph] * len(rows)),
+        values,
+    )
+    return cur.rowcount
+
+
+def _link_rents(cur) -> None:
+    cur.execute(
+        "UPDATE property_rents r "
+        "JOIN apartments a "
+        "  ON a.property_type = r.property_type "
+        " AND a.sgg_cd = r.sgg_cd AND a.apt_nm = r.apt_nm "
+        " AND COALESCE(a.jibun, '') = COALESCE(r.jibun, '') "
+        "SET r.apt_id = a.id WHERE r.apt_id IS NULL"
+    )
+
+
+def replace_rents(items: list[RentItem], property_type: str,
+                  sgg_cd: str | int, deal_ymd: str) -> int:
+    """그 (유형, 시군구, 계약월) 의 전월세를 API 가 준 그대로 바꿔 넣는다. 넣은 건수 반환.
+
+    전월세 API 는 모든 필드가 똑같은 행을 여러 건 준다. 등기일·동 번호가 없어
+    둘을 구분할 길이 없으니, 키로 걸러내면 국토교통부가 공개한 건수보다 적게
+    쌓인다. 판단할 근거가 없으면 출처를 그대로 비추는 편이 맞다. 덤으로 정정·
+    취소도 자동으로 반영된다 — 그쪽에서 빠지면 우리도 빠진다.
+
+    ★ 호출하는 쪽이 모든 페이지를 다 받은 뒤 한 번만 불러야 한다. 중간에 실패한
+      목록으로 부르면 멀쩡한 데이터를 지우고 일부만 넣게 된다. run_rents.collect
+      는 받은 건수와 totalCount 가 같을 때만 이 함수를 쓴다.
+    """
+    year, month = int(deal_ymd[:4]), int(deal_ymd[4:6])
+    rows = _rent_rows(items, property_type)
+
+    conn = _conn()
+    try:
+        with conn.cursor() as cur:
+            if rows:
+                _ensure_complexes(cur, rows, property_type)
+            cur.execute(
+                "DELETE FROM property_rents "
+                " WHERE property_type = %s AND sgg_cd = %s "
+                "   AND deal_year = %s AND deal_month = %s",
+                (property_type, int(sgg_cd), year, month),
+            )
+            saved = _insert_rents(cur, rows) if rows else 0
+            if rows:
+                _link_rents(cur)
+        conn.commit()
+        return saved
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def save_rents(items: list[RentItem], property_type: str = "APT") -> int:
+    """전월세 목록을 채우기만 한다 (지우지 않는다). 신규 저장된 건수 반환.
+
+    replace_rents 를 쓸 수 없을 때(페이지를 다 받지 못했을 때)의 안전한 경로다.
+    같은 내용이 겹친 행은 여기서도 순번으로 구분되지만, 이미 있는 행과는 키가
+    겹쳐 걸러질 수 있다 — 다음 정상 실행에서 통째로 바뀌면서 맞아진다.
     """
     if not items:
         return 0
 
-    rows = [_parse_rent(it, property_type) for it in items]
-    # 면적·날짜가 깨진 건은 버린다 (DECIMAL/DATE 에 못 들어간다)
-    rows = [r for r in rows if r["exclu_use_ar"] > 0 and r["deal_year"] > 0 and r["apt_nm"]]
+    rows = _rent_rows(items, property_type)
     if not rows:
         return 0
 
     conn = _conn()
     try:
         with conn.cursor() as cur:
-            seen: set[str] = set()
-            for r in rows:
-                key = f"{property_type}_{r['sgg_cd']}_{r['apt_nm']}_{r['jibun']}"
-                if key in seen:
-                    continue
-                seen.add(key)
-                cur.execute(
-                    "INSERT IGNORE INTO apartments "
-                    "(property_type, sgg_cd, umd_nm, jibun, apt_nm, build_year) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (property_type, r["sgg_cd"], r["umd_nm"], r["jibun"], r["apt_nm"],
-                     r["build_year"]),
-                )
-
-            # rent_type 은 생성 컬럼이라 넣지 않는다 (monthly_rent 로 자동 계산)
-            columns = list(rows[0].keys())
-            ph = "(" + ",".join(["%s"] * len(columns)) + ")"
-            values: list = []
-            for r in rows:
-                values.extend(r[c] for c in columns)
-            cur.execute(
-                f"INSERT IGNORE INTO property_rents ({','.join(columns)}) VALUES "
-                + ",".join([ph] * len(rows)),
-                values,
-            )
-            saved = cur.rowcount
-
-            cur.execute(
-                "UPDATE property_rents r "
-                "JOIN apartments a "
-                "  ON a.property_type = r.property_type "
-                " AND a.sgg_cd = r.sgg_cd AND a.apt_nm = r.apt_nm "
-                " AND COALESCE(a.jibun, '') = COALESCE(r.jibun, '') "
-                "SET r.apt_id = a.id WHERE r.apt_id IS NULL"
-            )
+            _ensure_complexes(cur, rows, property_type)
+            saved = _insert_rents(cur, rows)
+            _link_rents(cur)
         conn.commit()
         return saved
     except Exception:
