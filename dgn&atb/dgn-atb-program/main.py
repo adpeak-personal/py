@@ -45,8 +45,9 @@ class App:
         self.rows: dict[str, dict[str, Label]] = {}
 
         root.title("당근 · 부동산 수집기")
-        root.geometry("620x460+400+200")
-        root.minsize(560, 380)
+        # 작업 9줄 + 로그 영역이 보이는 높이
+        root.geometry("620x580+400+150")
+        root.minsize(560, 480)
         root.configure(bg="#f2f2f2")
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
