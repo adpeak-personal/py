@@ -47,11 +47,21 @@ RETRY_AFTER = timedelta(hours=1)
 MAX_TRIES = 3
 
 
+# 매일 다시 훑는 계약월 수(이번 달 포함). 2개월로 뒀더니 월초에 전전달이 창에서
+# 빠지면서, 그 뒤 들어온 지연 신고를 영구히 놓쳤다. 실측으로 확인했다:
+# 2026-09 분이 창에서 빠진 11/01 뒤로 국토교통부 공개 건수는 계속 늘었는데
+# (10/28→11/06 사이 표본 5개 구에서 +116) 우리가 받은 건 +45 에서 멈췄다.
+# 신고 기한이 계약 후 30일이고 그게 공개되기까지 더 걸리므로, 한 달치 여유를 둔다.
+RECENT_MONTHS = 3
+
+
 def _recent_months() -> str:
-    """지난달~이번달 'YYYYMM-YYYYMM'. 실거래 신고는 계약 후 30일 이내라 지난달도 계속 채워진다."""
+    """최근 RECENT_MONTHS 개월 'YYYYMM-YYYYMM'. 지연 신고가 계속 채워지므로 지난달들도 다시 받는다."""
     today = date.today()
-    prev = (today.replace(day=1) - timedelta(days=1))
-    return f"{prev:%Y%m}-{today:%Y%m}"
+    first = today.replace(day=1)
+    for _ in range(RECENT_MONTHS - 1):
+        first = (first - timedelta(days=1)).replace(day=1)
+    return f"{first:%Y%m}-{today:%Y%m}"
 
 
 @dataclass
