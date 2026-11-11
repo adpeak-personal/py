@@ -29,7 +29,8 @@ else:
 ACCOUNTS = [
     {"name": "top",  "secrets": "daggn-top.json",  "token": "token-top.json",  "route": "https://api.adpeak.kr/zapier/dgn/topby"},
     {"name": "rich", "secrets": "daggn-rich.json", "token": "token-rich.json", "route": "https://api.richby.co.kr/zapier/dgn/richby"},
-    {"name": "with", "secrets": "daggn-with.json", "token": "token-with.json", "route": "https://api.withby.kr/zapier/dgn/withby"},
+    # 위드는 peak-crm 으로 넘어갔다 (2026-11). 시트 전체를 보내면 peak-crm 이 새 행만 받는다
+    {"name": "with", "secrets": "daggn-with.json", "token": "token-with.json", "route": "https://withby.kr/api/leads/danggeun/sheet"},
 ]
 
 # 한국 표준시 (Drive의 UTC 시각을 현재 시간대에 맞춰 보정하기 위함)
@@ -194,7 +195,8 @@ def monitor_account(account):
                 }
                 print(f"요청 URL: {route}")
                 try:
-                    res = requests.post(route, json=payload, timeout=10)
+                    # peak-crm 은 행마다 처리해서 큰 시트를 처음 보낼 땐 몇 초 넘게 걸린다
+                    res = requests.post(route, json=payload, timeout=30)
                     print(f"요청 완료: {res.status_code} / {res.text}")
                 except Exception as req_err:
                     print(f"요청 실패: {req_err}")
