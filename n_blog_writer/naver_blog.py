@@ -1,12 +1,12 @@
 """네이버 블로그 진입 및 글 작성."""
 import random
+import threading
 import time
-import traceback
 from pathlib import Path
 from typing import Callable, Tuple
-import pyautogui as pg
 from playwright.sync_api import (
     BrowserContext,
+    Error as PWError,
     Frame,
     Page,
     TimeoutError as PWTimeout,
@@ -50,11 +50,11 @@ IMAGE_BUTTON = ".se-toolbar.se-document-toolbar li:first-child"
 # 이미지 하나당 .se-image-resource 하나가 붙는다.
 IMAGE_INSERTED = ".se-image-resource"
 
-# 한글 Windows 의 파일 열기 다이얼로그 창 제목.
-FILE_DIALOG_TITLE = "열기"
-FILE_DIALOG_OPEN_TIMEOUT = 10   # 클릭 후 다이얼로그가 뜰 때까지
-FILE_DIALOG_CLOSE_TIMEOUT = 10  # Enter 후 다이얼로그가 닫힐 때까지
-IMAGE_UPLOAD_TIMEOUT = 60       # 다이얼로그 닫힌 뒤 실제 업로드까지 (네트워크 감안)
+IMAGE_UPLOAD_TIMEOUT = 60  # 파일 지정 후 실제 업로드까지 (네트워크 감안)
+
+# 발행: 상단 '발행' 버튼이 설정 레이어를 열고, 레이어 안의 '발행' 이 최종 확정이다.
+PUBLISH_BUTTON = 'button:has-text("발행")'
+PUBLISH_TIMEOUT = 60  # 확정 후 에디터를 벗어날 때까지
 
 # 본문 라인의 마커. 라인 전체가 이 접두사로 시작하면 특수 처리한다.
 IMG_MARKER = "img_line|"     # img_line|파일명.jpg
@@ -207,115 +207,40 @@ def _type_text(writer: Page, frame: Frame, selector: str, text: str) -> None:
             _pause()
 
 
-def _dialog_open(title: str = FILE_DIALOG_TITLE) -> bool:
-    """제목이 일치하는 OS 창이 하나라도 있는지 검사한다.
-
-    getWindowsWithTitle 은 부분 일치를 지원하지만 다른 창이 잡히지 않도록
-    완전 일치로 좁힌다.
-    """
-    return any((w.title or "") == title for w in pg.getWindowsWithTitle(title))
-
-
-def _wait_for_dialog_open(
-    log: LogFn, title: str = FILE_DIALOG_TITLE, timeout: int = FILE_DIALOG_OPEN_TIMEOUT
-) -> None:
-    """OS 파일 열기 다이얼로그가 뜰 때까지 기다린다."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _dialog_open(title):
-            log(f"[체크1] 파일 다이얼로그 '{title}' 열림 확인")
-            return
-        time.sleep(0.2)
-    raise RuntimeError(
-        f"파일 다이얼로그 '{title}' 가 {timeout}초 안에 뜨지 않았습니다."
-    )
-
-
-def _wait_for_dialog_close(
-    log: LogFn, title: str = FILE_DIALOG_TITLE, timeout: int = FILE_DIALOG_CLOSE_TIMEOUT
-) -> None:
-    """OS 파일 열기 다이얼로그가 닫힐 때까지 기다린다."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if not _dialog_open(title):
-            log(f"[체크2] 파일 다이얼로그 '{title}' 닫힘 확인")
-            return
-        time.sleep(0.3)
-    raise RuntimeError(
-        f"파일 다이얼로그 '{title}' 가 {timeout}초 안에 닫히지 않았습니다."
-    )
-
-
 def _insert_image(frame: Frame, image_path: Path, log: LogFn) -> None:
     """SE 툴바의 '사진' 버튼을 눌러 이미지를 삽입한다.
 
-    각 단계마다 상태를 확인해서 인터넷/OS 지연이 있어도 다음 단계로 성급히
-    넘어가지 않는다:
-      1) 툴바 버튼 클릭 후 파일 다이얼로그가 실제로 떴는지
-      2) 경로 입력 + Enter 후 다이얼로그가 실제로 닫혔는지
-      3) 에디터의 .se-image-resource 갯수가 기대만큼 늘었는지
-
-    실패 시 pg.alert 으로 실행을 멈추므로, 알럿이 떠 있는 동안 브라우저에서
-    실제 DOM 을 확인해 셀렉터를 잡을 수 있다.
+    파일 선택창은 Playwright 가 가로채므로 OS 창이 뜨지 않고 PC 를 점유하지 않는다.
+    업로드 완료는 에디터의 .se-image-resource 갯수가 늘었는지로 확인한다.
     """
-    try:
-        if not image_path.exists():
-            raise FileNotFoundError(f"이미지 파일이 없음: {image_path}")
+    if not image_path.exists():
+        raise FileNotFoundError(f"이미지 파일이 없음: {image_path}")
 
-        path_str = str(image_path.resolve())
-        log(f"이미지 삽입: {image_path.name}")
+    log(f"이미지 삽입: {image_path.name}")
 
-        button = frame.locator(IMAGE_BUTTON).first
-        button.wait_for(state="visible", timeout=5000)
+    button = frame.locator(IMAGE_BUTTON).first
+    button.wait_for(state="visible", timeout=5000)
 
-        # 삽입 전 이미지 개수를 기록해 두면 업로드 완료 시점을 알 수 있다.
-        before = frame.locator(IMAGE_INSERTED).count()
-        expected = before + 1
+    before = frame.locator(IMAGE_INSERTED).count()
+    expected = before + 1
 
-        # (1) 클릭 → 파일 다이얼로그가 뜰 때까지 대기.
+    with frame.page.expect_file_chooser(timeout=10000) as chooser:
         button.click()
-        _wait_for_dialog_open(log)
+    chooser.value.set_files(str(image_path.resolve()))
 
-        # (2) 기본값이 채워져 있을 수 있어 전체 선택 후 덮어쓴다.
-        #     Enter 후 다이얼로그가 닫힐 때까지 대기.
-        pg.hotkey("ctrl", "a")
-        time.sleep(0.1)
-        pg.write(path_str, interval=0.02)
-        time.sleep(0.3)
-        pg.press("enter")
-        _wait_for_dialog_close(log)
-
-        # (3) 실제로 이미지가 붙었는지 갯수로 확인.
-        deadline = time.time() + IMAGE_UPLOAD_TIMEOUT
-        while time.time() < deadline:
-            current = frame.locator(IMAGE_INSERTED).count()
-            if current >= expected:
-                log(f"[체크3] 이미지 삽입 확인 ({before} → {current})")
-                _pause()
-                return
-            time.sleep(0.3)
+    deadline = time.time() + IMAGE_UPLOAD_TIMEOUT
+    while time.time() < deadline:
         current = frame.locator(IMAGE_INSERTED).count()
-        raise RuntimeError(
-            f"이미지가 {IMAGE_UPLOAD_TIMEOUT}초 안에 붙지 않았습니다 "
-            f"(기대 {expected}개, 현재 {current}개)"
-        )
-    except Exception as exc:
-        tb = traceback.format_exc()
-        log(tb)
-        pg.alert(
-            text=(
-                "이미지 삽입 실패\n"
-                "파일: naver_blog.py\n"
-                "함수: _insert_image\n"
-                f"IMAGE_BUTTON = {IMAGE_BUTTON!r}\n"
-                f"IMAGE_INSERTED = {IMAGE_INSERTED!r}\n\n"
-                f"{type(exc).__name__}: {exc}\n\n"
-                "이 창이 떠 있는 동안 브라우저에서 DOM 을 확인하세요.\n"
-                "[OK] 를 누르면 브라우저가 닫히고 종료됩니다."
-            ),
-            title="이미지 삽입 실패",
-        )
-        raise
+        if current >= expected:
+            log(f"이미지 삽입 확인 ({before} → {current})")
+            _pause()
+            return
+        frame.page.wait_for_timeout(300)
+    current = frame.locator(IMAGE_INSERTED).count()
+    raise RuntimeError(
+        f"이미지가 {IMAGE_UPLOAD_TIMEOUT}초 안에 붙지 않았습니다 "
+        f"(기대 {expected}개, 현재 {current}개)"
+    )
 
 
 def _type_chars(writer: Page, text: str) -> None:
@@ -471,3 +396,59 @@ def write_post(
     _type_body(writer, frame, body, image_dir, log)
 
     log("작성 완료")
+
+
+def _left_editor(writer: Page) -> bool:
+    """탭이 닫혔거나 글쓰기 화면을 벗어났으면 True (발행되면 글 보기로 바뀐다)."""
+    if writer.is_closed():
+        return True
+    return not any(WRITE_FORM_PATH in (f.url or "") for f in writer.frames)
+
+
+def publish_post(writer: Page, frame: Frame, log: LogFn = print) -> None:
+    """발행 레이어를 열고 확정한 뒤, 실제로 에디터를 벗어났는지 확인한다."""
+    buttons = frame.locator(PUBLISH_BUTTON)
+    buttons.first.wait_for(state="visible", timeout=10000)
+    before = buttons.count()
+    buttons.first.click()
+
+    # 레이어가 열리면 '발행' 버튼이 하나 늘어난다. 마지막 것이 최종 확정이다.
+    deadline = time.time() + 10
+    while buttons.count() <= before:
+        if time.time() >= deadline:
+            raise RuntimeError("발행 설정 레이어가 열리지 않았습니다.")
+        writer.wait_for_timeout(200)
+    _section_pause()
+    buttons.last.click()
+
+    deadline = time.time() + PUBLISH_TIMEOUT
+    while time.time() < deadline:
+        if _left_editor(writer):
+            log("발행 완료")
+            return
+        writer.wait_for_timeout(500)
+    raise RuntimeError(f"{PUBLISH_TIMEOUT}초 안에 발행이 끝나지 않았습니다.")
+
+
+def wait_for_manual_publish(
+    writer: Page, stop_event: threading.Event, log: LogFn = print
+) -> bool:
+    """테스트 모드: 사람이 브라우저에서 확인하고 발행할 때까지 기다린다.
+
+    발행되면 True, 중지를 눌렀으면 False. 발행하지 않고 넘어가려면 탭을 닫으면
+    되는데, 탭이 닫힌 경우 발행 여부를 알 수 없으므로 False 로 본다.
+    """
+    log("[테스트] 내용을 확인하고 직접 발행하세요. 건너뛰려면 글쓰기 탭을 닫으세요.")
+    while not stop_event.is_set():
+        try:
+            if writer.is_closed():
+                log("[테스트] 탭 닫힘: 발행 안 한 것으로 처리")
+                return False
+            if _left_editor(writer):
+                log("[테스트] 발행 확인")
+                return True
+            writer.wait_for_timeout(500)
+        except PWError:
+            # 대기 중 탭이 닫히면 Playwright 예외가 난다. 다음 루프에서 판정한다.
+            time.sleep(0.2)
+    return False

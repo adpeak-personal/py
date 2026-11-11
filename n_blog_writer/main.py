@@ -15,7 +15,7 @@ class App:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         root.title("네이버 블로그 글 작성기")
-        root.geometry("560x360")
+        root.geometry("640x360")
 
         self.messages: "queue.Queue[str]" = queue.Queue()
         self.stop_event = threading.Event()
@@ -31,6 +31,12 @@ class App:
             bar, text="중지", width=12, command=self.stop, state="disabled"
         )
         self.stop_btn.pack(side="left", padx=(8, 0))
+
+        # 실수로 자동 발행되지 않도록 켜진 상태로 시작한다.
+        self.test_mode = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            bar, text="테스트 모드 (확인 후 직접 발행)", variable=self.test_mode
+        ).pack(side="left", padx=(12, 0))
 
         self.status = tk.Label(bar, text="대기 중", anchor="w")
         self.status.pack(side="left", padx=(12, 0))
@@ -76,12 +82,18 @@ class App:
         self.stop_btn.configure(state="normal")
         self.status.configure(text="실행 중")
 
-        self.worker = threading.Thread(target=self._run, daemon=True)
+        # Tk 변수는 GUI 스레드에서만 읽는다.
+        test_mode = self.test_mode.get()
+        self.worker = threading.Thread(
+            target=self._run, args=(test_mode,), daemon=True
+        )
         self.worker.start()
 
-    def _run(self) -> None:
+    def _run(self, test_mode: bool) -> None:
         try:
-            run_workspace(log=self.log, stop_event=self.stop_event)
+            run_workspace(
+                log=self.log, stop_event=self.stop_event, test_mode=test_mode
+            )
         except Exception:
             pass  # 원인은 workspace 쪽에서 이미 로그로 남긴다
 

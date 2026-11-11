@@ -6,6 +6,8 @@ BASE_DIR = Path(__file__).resolve().parent
 CRED_FILE = BASE_DIR / "id_pwd.txt"
 BLOG_DIR = BASE_DIR / "blog"
 PROFILE_ROOT = BLOG_DIR / "profiles"
+IMAGE_DIR = BASE_DIR / "sample_image"
+PUBLISHED_FILE = BLOG_DIR / "published.txt"  # 발행한 제목 (한 줄에 하나)
 
 
 @dataclass
