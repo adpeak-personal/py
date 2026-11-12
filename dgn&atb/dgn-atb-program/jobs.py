@@ -15,7 +15,8 @@ atb 작업끼리는 DB·API 한도를 나눠 쓰므로 한 번에 하나씩만 �
 노트북이 예약 시각에 꺼져 있었으면 켜진 뒤 바로 따라잡는다
 (오늘 아직 안 돌았고 예약 시각이 지났으면 실행).
 
-로그: logs/<작업>-YYYYMMDD.log (30일 지난 것은 지운다)
+로그: logs/<작업>-YYYYMMDD.log — KEEP_LOGS 가 지났거나 폴더가 LOGS_MAX_MB 를 넘으면 오래된 것부터 지운다.
+작업 결과는 공용 DB 의 job_runs 표에도 남긴다 (runlog.py — 다른 PC 에서 실패 원인을 본다).
 """
 from __future__ import annotations
 
@@ -29,6 +30,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
+import runlog
+
 # exe 로 묶였으면 exe 옆 폴더가 기준 (.env·토큰·로그를 exe 밖에 둔다)
 FROZEN = getattr(sys, "frozen", False)
 ROOT = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
@@ -37,7 +40,9 @@ ATB_DIR = ROOT / "atb"
 LOG_DIR = ROOT / "logs"
 STATE_FILE = LOG_DIR / "state.json"
 
-KEEP_LOGS = timedelta(days=30)
+KEEP_LOGS = timedelta(days=14)
+# 당근은 5분마다 시트를 통째로 찍어서 로그가 금방 커진다 — 폴더 전체 상한
+LOGS_MAX_MB = 300
 TICK_SEC = 20
 VENV_PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 
@@ -377,12 +382,15 @@ class Scheduler:
         log_path = LOG_DIR / f"{job.key}-{datetime.now():%Y%m%d}.log"
         self.on_event(f"{job.label} 시작")
         code = -1
+        timed_out = False
+        started = datetime.now()
+        start_marker = f"===== {started:%Y-%m-%d %H:%M:%S} {job.key} 시작 ====="
         try:
             def mark(line: str):
                 with open(log_path, "a", encoding="utf-8") as log:
                     log.write(line)
 
-            mark(f"\n===== {datetime.now():%Y-%m-%d %H:%M:%S} {job.key} 시작 =====\n")
+            mark(f"\n{start_marker}\n")
             # 출력은 자식이 로그 파일에 직접 쓴다 (창 없는 exe 는 표준출력이 없어서 파이프로 못 받는다)
             proc = subprocess.Popen(
                 _worker_cmd(job, log_path), cwd=ROOT,
@@ -393,6 +401,7 @@ class Scheduler:
             try:
                 code = proc.wait(timeout=job.timeout_min * 60 if job.timeout_min else None)
             except subprocess.TimeoutExpired:
+                timed_out = True
                 proc.kill()
                 code = proc.wait()
                 mark(f"!!!!! {job.timeout_min}분 초과로 강제 종료 !!!!!\n")
@@ -406,14 +415,31 @@ class Scheduler:
             job.last_code = code
             with self._lock:
                 self._busy_groups.discard(job.group)
+                attempt = self._tries.get(job.key, (None, 1))[1]
                 if job.daily_at:
                     self._after_daily(job, code)
             self.on_event(f"{job.label} 종료 (코드 {code})")
+            # 공용 DB 에 결과 한 줄 — 일일 작업은 늘, 당근(5분마다)은 실패만
+            if job.daily_at or code not in DONE_CODES:
+                self._record(job, started, code, timed_out, attempt, log_path, start_marker)
             if not self._stop.is_set():
                 try:
                     self.tick()   # 대기 중인 같은 그룹 작업을 다음 주기까지 기다리지 않고 바로 시작
                 except Exception as e:
                     self.on_event(f"스케줄러 오류: {e}")
+
+    def _record(self, job: Job, started: datetime, code: int, timed_out: bool, attempt: int, log_path: Path, start_marker: str):
+        import socket
+
+        err = runlog.record(
+            _read_env(ATB_DIR / ".env"),
+            job=job.key, label=job.label, started=started, ended=job.last_end or datetime.now(),
+            code=code, timed_out=timed_out, attempt=attempt if job.daily_at else 1,
+            log_tail=runlog.tail_of_run(log_path, start_marker), host=socket.gethostname(),
+        )
+        if err:
+            # 기록 실패는 작업과 상관없다 — 화면에만 (사유 앞부분만)
+            self.on_event(f"{job.label}: 결과를 DB 에 못 남김 ({err[:80]})")
 
     def _after_daily(self, job: Job, code: int):
         """일일 작업이 실패하면(한도 초과 제외) 오늘 기록을 지우고 1시간 뒤 재시도. 하루 MAX_TRIES 번까지."""
@@ -456,10 +482,27 @@ class Scheduler:
         self.tunnel.close()
 
     def _prune_logs(self):
+        """오래된 로그를 지운다 — KEEP_LOGS 가 지난 것, 그리고 폴더가 LOGS_MAX_MB 를 넘으면 오래된 것부터.
+        오늘 파일(쓰는 중)과 터널 로그는 남긴다."""
         cutoff = time.time() - KEEP_LOGS.total_seconds()
+        today = f"{datetime.now():%Y%m%d}"
+        files = []
         for f in LOG_DIR.glob("*.log"):
-            if f.stat().st_mtime < cutoff:
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            keep = today in f.name or f.name == "ssh-tunnel.log"
+            if st.st_mtime < cutoff and not keep:
                 f.unlink(missing_ok=True)
+            elif not keep:
+                files.append((st.st_mtime, st.st_size, f))
+        total = sum(size for _, size, _ in files)
+        for _, size, f in sorted(files):
+            if total <= LOGS_MAX_MB * 1024 * 1024:
+                break
+            f.unlink(missing_ok=True)
+            total -= size
 
 
 def preflight() -> list[str]:
