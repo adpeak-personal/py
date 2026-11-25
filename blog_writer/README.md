@@ -53,6 +53,16 @@ copy settings.sample.json settings.json
 .venv\Scripts\python.exe run_login.py prof-01      # 그 프로필만
 ```
 
+옵션 두 가지.
+
+| 옵션 | |
+|---|---|
+| `--shot` | 성공했을 때도 화면을 `shots/` 에 남긴다 |
+| `--keep` | 작업이 끝나도 **창을 닫지 않고** Ctrl+C 를 누를 때까지 기다린다 |
+
+`--keep` 은 화면을 눈으로 들여다볼 때 쓴다. Ctrl+C 를 누르면 그 창을 닫고 다음 계정으로 간다.
+(`headless` 가 true 면 창이 안 뜨므로 쓸 수 없다 — 프로그램이 알려주고 멈춘다.)
+
 IP 가 제대로 물렸는지만 보고 싶으면:
 
 ```
