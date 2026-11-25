@@ -29,7 +29,9 @@ for stream in (sys.stdout, sys.stderr):
         pass
 
 from browser import launch, measure_ip, save_shot
-from config import Account, Profile, Settings
+import shutil
+
+from config import PROFILE_ROOT, Account, Profile, Settings
 from naver_login import FAILED, NEED_HUMAN, OK, login, logged_in
 from vpn import switch_vpn
 from zzikko import Zzikko, ZzikkoError
@@ -161,6 +163,40 @@ def run_profile(
         tally[result] = tally.get(result, 0) + 1
 
 
+def clean_pending(api: Zzikko) -> None:
+    """찍고에서 '삭제' 로 표시한 프로필을 치운다.
+
+    **폴더를 먼저 지우고 행을 지운다.** 순서가 바뀌면 표시가 사라져서 폴더가 영영 남는다
+    (그 안에 로그인된 쿠키가 들어 있다). 폴더를 못 지우면 행도 두고 다음 번에 다시 시도한다.
+    """
+    try:
+        pending = api.pending_delete()
+    except ZzikkoError as error:
+        print(f"치울 목록을 받지 못했습니다: {error}")
+        return
+    if not pending:
+        return
+
+    print(f"지우기로 표시된 프로필 {len(pending)}개를 치웁니다")
+    for profile_id, name in pending:
+        folder = PROFILE_ROOT / name
+        try:
+            if folder.exists():
+                shutil.rmtree(folder)
+                print(f"  {name}: 폴더 지움")
+            else:
+                print(f"  {name}: 폴더가 없습니다 (이 PC 에서 안 돌린 프로필)")
+        except Exception as error:
+            # 크롬이 떠 있으면 폴더가 잠겨 있다. 행을 남겨 다음 번에 다시 한다
+            print(f"  {name}: 폴더를 지우지 못했습니다. {type(error).__name__}: {error}")
+            continue
+        try:
+            api.delete_profile(profile_id)
+            print(f"  {name}: 목록에서 지움")
+        except ZzikkoError as error:
+            print(f"  {name}: 목록에서 지우지 못했습니다. {error}")
+
+
 def main() -> int:
     options = {"--shot", "--keep"}
     args = [a for a in sys.argv[1:] if a not in options]
@@ -179,6 +215,14 @@ def main() -> int:
     api = Zzikko(settings)
     try:
         api.login()
+    except ZzikkoError as error:
+        print(error)
+        return 1
+
+    # 돌리기 전에 치운다 — 지울 프로필로 로그인하는 일이 없게
+    clean_pending(api)
+
+    try:
         profiles = api.profiles(only)
     except ZzikkoError as error:
         print(error)

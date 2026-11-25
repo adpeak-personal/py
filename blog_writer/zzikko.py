@@ -81,6 +81,20 @@ class Zzikko:
         return out
 
     # ------------------------------------------------------------------
+    def pending_delete(self) -> list[tuple[int, str]]:
+        """지우기로 표시해 둔 프로필들 (id, 이름)."""
+        res = self.session.get(f"{self.base}/admin/blog/pending-delete", timeout=20)
+        if not res.ok:
+            raise ZzikkoError(f"치울 목록을 받지 못했습니다({res.status_code}): {self._message(res)}")
+        return [(row["id"], row["name"]) for row in res.json().get("items", [])]
+
+    def delete_profile(self, profile_id: int) -> None:
+        """행을 지운다. **폴더를 먼저 지운 뒤에** 부를 것 — 순서가 바뀌면 폴더가 남는다."""
+        res = self.session.delete(f"{self.base}/admin/blog/profiles/{profile_id}", timeout=20)
+        if not res.ok:
+            raise ZzikkoError(f"프로필을 지우지 못했습니다({res.status_code}): {self._message(res)}")
+
+    # ------------------------------------------------------------------
     def record_ip(self, profile: Profile, ip: str) -> None:
         """브라우저에서 잰 IP 를 그 프로필에 적어 둔다 (찍고가 비어 있을 때만 받는다)."""
         res = self.session.post(
