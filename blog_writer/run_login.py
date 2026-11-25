@@ -114,9 +114,19 @@ def run_account(
 def run_profile(
     profile: Profile, settings: Settings, api: Zzikko, tally: dict[str, int], shot: bool = False, keep: bool = False
 ) -> None:
-    print(f"\n[{profile.name}] 계정 {len(profile.accounts)}개")
+    todays = profile.todays
+    if profile.current_account_id is not None:
+        print()
+        print(f"[{profile.name}] 고른 아이디 하나만 돌립니다 (붙은 것 {len(profile.accounts)}개)")
+    else:
+        print()
+        print(f"[{profile.name}] 계정 {len(profile.accounts)}개")
+
     if not profile.accounts:
         print("  붙은 계정이 없습니다 (네이버 계정 화면에서 프로필 이름을 적어주세요)")
+        return
+    if not todays:
+        print("  고른 아이디가 '쓸 수 없음'으로 꺼져 있습니다. 어드민에서 다시 골라주세요")
         return
 
     # ── VPN 을 이 프로필 자리로 옮긴다 (자동이면 명령으로, 아니면 사람에게 부탁)
@@ -141,7 +151,7 @@ def run_profile(
     else:
         print(f"  IP 확인 {seen}")
 
-    for index, account in enumerate(profile.accounts):
+    for index, account in enumerate(todays):
         if index:
             pause = random.uniform(*PAUSE_RANGE)
             print(f"  {pause:.0f}초 쉬는 중...")

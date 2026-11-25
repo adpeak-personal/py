@@ -67,6 +67,7 @@ class Zzikko:
                     user_agent=row.get("userAgent") or "",
                     expected_ip=row.get("expectedIp") or "",
                     vpn_location=row.get("vpnLocation") or "",
+                    current_account_id=row.get("currentAccountId"),
                     accounts=[
                         Account(
                             id=a["id"],

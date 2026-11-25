@@ -91,7 +91,22 @@ class Profile:
     expected_ip: str = ""
     # VPN 에서 고를 자리 이름 (자동 전환에 쓴다)
     vpn_location: str = ""
+    # 지금 쓸 아이디. 찍고에서 라디오로 고른 것이다. 없으면 붙은 것 전부를 돈다
+    current_account_id: int | None = None
     accounts: list[Account] = field(default_factory=list)
+
+    @property
+    def todays(self) -> list[Account]:
+        """이번에 돌릴 아이디들.
+
+        찍고에서 하나를 골라 뒀으면 **그것만** 돌린다. 주기적으로 하나씩 돌려 가며
+        쓰려는 것이라, 고른 게 있는데 셋을 다 돌리면 뜻이 어긋난다.
+        """
+        if self.current_account_id is None:
+            return self.accounts
+        picked = [a for a in self.accounts if a.id == self.current_account_id]
+        # 고른 아이디가 '쓸 수 없음'으로 내려갔으면 목록에서 빠져 있다 — 그땐 아무것도 안 돈다
+        return picked
 
     def dir_for(self, account: "Account") -> Path:
         """크롬 프로필 폴더는 **아이디마다** 따로 둔다 (IP 는 같이 쓴다).
