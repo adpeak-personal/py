@@ -7,12 +7,14 @@
 """
 from __future__ import annotations
 
+import random
 import time
 from typing import Callable
 
 import pyperclip
 from playwright.sync_api import BrowserContext, Page, TimeoutError as PWTimeout
 
+import human
 from config import Account
 
 LogFn = Callable[[str], None]
@@ -26,8 +28,13 @@ LOGOUT_LINK = "[class^='MyView-module__btn_logout'], [class*=' MyView-module__bt
 
 # 로그인 결과
 OK = "ok"
-NEED_HUMAN = "need_human"  # 캡차·기기등록·2단계 인증
+NEED_HUMAN = "need_human"  # 캡차·기기등록·2단계 인증·보호조치
 FAILED = "failed"  # 아이디/비번이 틀렸거나 막힌 계정
+
+# 화면 글자로 가늠하는 단서들
+WRONG_WORDS = ("아이디 또는 비밀번호", "다시 확인", "등록되지 않은")
+# 보호조치는 캡차와 다르다 — 계정이 이미 찍혔다는 뜻이라, 더 두드리면 안 된다
+PROTECT_WORDS = ("보호조치", "보호 조치", "새로운 기기", "기기 등록", "본인 확인", "이용 제한")
 
 
 def logged_in(page: Page, timeout: float = 10.0) -> bool:
@@ -48,15 +55,23 @@ def logged_in(page: Page, timeout: float = 10.0) -> bool:
         time.sleep(0.5)
 
 
-def _paste(page: Page, selector: str, value: str) -> None:
-    """클립보드 붙여넣기로 넣는다.
+def _fill(page: Page, selector: str, value: str, log: LogFn) -> None:
+    """칸 하나를 채운다 — **진짜 마우스로 옮겨 가서 누르고, 붙여넣는다.**
 
-    keyboard.type 처럼 일정한 간격의 타이핑은 사람이 아닌 티가 난다.
+    Playwright 의 click/type 은 브라우저가 만들어 내는 가짜 사건이라 커서가
+    순간이동하고 글자 간격이 고르다. 보호조치에 걸린 뒤로 실제 입력으로 바꿨다.
+
+    마우스를 옮기지 못하면(창이 가려졌거나 좌표가 이상하면) 평범한 클릭으로
+    돌아간다 — 엉뚱한 자리를 누르는 것보다 낫다.
     """
-    page.click(selector)
-    pyperclip.copy(value)
-    page.keyboard.press("Control+V")
-    time.sleep(0.4)
+    if human.move_and_click(page, selector, log):
+        human.paste(value)
+    else:
+        log("     마우스를 쓰지 못해 평범한 입력으로 넣습니다")
+        page.click(selector)
+        pyperclip.copy(value)
+        page.keyboard.press("Control+V")
+    time.sleep(random.uniform(0.3, 0.7))
 
 
 def login(context: BrowserContext, account: Account, timeout: int = 15, log: LogFn = print) -> str:
@@ -72,19 +87,32 @@ def login(context: BrowserContext, account: Account, timeout: int = 15, log: Log
     log(f"  {account.login_id}: 로그인 시도")
     page.goto(LOGIN_URL, wait_until="domcontentloaded")
 
-    _paste(page, "#id", account.login_id)
-    _paste(page, "#pw", account.password)
+    # 사람처럼 — 창을 앞으로 두고, 페이지를 한 박자 보고, 칸마다 쉬어 가며 넣는다
+    human.focus_window(page)
+    human.rest(1.0, 2.0)
+
+    _fill(page, "#id", account.login_id, log)
+    human.rest(1.0, 2.0)
+
+    _fill(page, "#pw", account.password, log)
+    human.rest(1.0, 2.0)
 
     # '로그인 상태 유지' — 다음 실행부터 이 폴더의 쿠키로 그냥 들어간다
     try:
         keep = page.locator("#loginStay")
         if keep.count() and not keep.is_checked():
-            page.click("label[for='loginStay']")
+            if not human.move_and_click(page, "label[for='loginStay']", log):
+                page.click("label[for='loginStay']")
+            human.rest(0.5, 1.2)
     except PWTimeout:
         pass
 
     # 반응형이라 로그인 버튼이 두 개 있다 (보이는 쪽만 누른다)
-    page.locator("#loginBtn_row, #loginBtn_column").locator("visible=true").first.click()
+    button = page.locator("#loginBtn_row, #loginBtn_column").locator("visible=true").first
+    # 보이는 쪽의 id 를 알아내 그 버튼으로 마우스를 옮긴다
+    button_id = button.get_attribute("id") or ""
+    if not (button_id and human.move_and_click(page, f"#{button_id}", log)):
+        button.click()
 
     if logged_in(page, timeout=timeout):
         log(f"  {account.login_id}: 로그인 성공")
@@ -97,9 +125,16 @@ def login(context: BrowserContext, account: Account, timeout: int = 15, log: Log
     except Exception:
         pass
 
-    if any(word in body for word in ("아이디 또는 비밀번호", "다시 확인", "등록되지 않은")):
+    if any(word in body for word in WRONG_WORDS):
         log(f"  {account.login_id}: 아이디·비밀번호가 맞지 않음")
         return FAILED
 
-    log(f"  {account.login_id}: 사람 확인이 필요합니다 (캡차·기기등록 등). 창을 보세요")
+    if any(word in body for word in PROTECT_WORDS):
+        # 캡차와 달리 계정이 이미 찍힌 상태다. 풀고 나서도 바로 또 돌리지 말 것
+        log(f"  {account.login_id}: 보호조치·기기 등록 화면입니다")
+        log("     이건 '사람인지 확인' 이 아니라 네이버가 이 접속을 낯설게 본 것입니다.")
+        log("     풀고 나서 그 아이디는 하루쯤 쉬게 두세요. 바로 또 돌리면 더 세게 걸립니다.")
+        return NEED_HUMAN
+
+    log(f"  {account.login_id}: 사람 확인이 필요합니다 (캡차 등). 창을 보세요")
     return NEED_HUMAN

@@ -1,3 +1,4 @@
 playwright>=1.49
 requests>=2.32
 pyperclip>=1.9
+pyautogui>=0.9.54
