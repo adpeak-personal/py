@@ -100,5 +100,5 @@ def login(context: BrowserContext, account: Account, timeout: int = 15, log: Log
         log(f"  {account.login_id}: 아이디·비밀번호가 맞지 않음")
         return FAILED
 
-    log(f"  {account.login_id}: 사람 확인이 필요합니다 (캡차·기기등록 등) — 창을 보세요")
+    log(f"  {account.login_id}: 사람 확인이 필요합니다 (캡차·기기등록 등). 창을 보세요")
     return NEED_HUMAN

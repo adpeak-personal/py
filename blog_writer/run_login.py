@@ -16,6 +16,13 @@ import random
 import sys
 import time
 
+# 윈도우 콘솔은 cp949 다. 출력을 파일로 넘기면 한글·기호에서 터지므로 미리 막아 둔다
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from browser import current_ip, launch
 from config import Account, Profile, Settings
 from naver_login import FAILED, NEED_HUMAN, OK, login
@@ -86,11 +93,11 @@ def main() -> int:
             try:
                 result = run_account(profile, account, settings, api)
             except Exception as error:  # 한 계정이 넘어져도 나머지는 돌린다
-                print(f"  {account.login_id}: 열지 못했습니다 — {type(error).__name__}: {error}")
+                print(f"  {account.login_id}: 열지 못했습니다. {type(error).__name__}: {error}")
                 result = FAILED
             tally[result] = tally.get(result, 0) + 1
 
-    print(f"\n끝났습니다 — 성공 {tally[OK]} · 실패 {tally[FAILED]} · 사람 확인 필요 {tally[NEED_HUMAN]}")
+    print(f"\n끝났습니다. 성공 {tally[OK]} · 실패 {tally[FAILED]} · 사람 확인 필요 {tally[NEED_HUMAN]}")
     return 0
 
 

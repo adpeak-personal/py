@@ -21,13 +21,17 @@
 | `naver_login.py` | 네이버 로그인 (기존 `n_blog_writer` 코드를 옮겨 왔다) |
 | `run_login.py` | 위를 엮어 전부 돌린다 |
 
-## 준비
+## 준비 (처음 한 번)
 
 ```
-pip install -r requirements.txt
-playwright install chromium
-copy settings.sample.json settings.json      # 운영진 계정을 적는다
+cd C:\project\cluade\py\blog_writer
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m playwright install chromium
+copy settings.sample.json settings.json
 ```
+
+`settings.json` 에 **운영진 계정**과 찍고 주소를 적는다.
 
 `settings.json` 과 `profiles/` 는 git 에 올라가지 않는다 (`.gitignore`).
 
@@ -38,15 +42,17 @@ copy settings.sample.json settings.json      # 운영진 계정을 적는다
 
 ## 실행
 
+`.venv` 의 파이썬으로 돌린다 (시스템 파이썬에는 playwright 가 없다).
+
 ```
-python run_login.py                 # 프로필 전부
-python run_login.py prof-01         # 그 프로필만
+.venv\Scripts\python.exe run_login.py              # 프로필 전부
+.venv\Scripts\python.exe run_login.py prof-01      # 그 프로필만
 ```
 
 IP 가 제대로 물렸는지만 보고 싶으면:
 
 ```
-python -c "import run_login; run_login.check_ip('prof-01')"
+.venv\Scripts\python.exe -c "import run_login; run_login.check_ip('prof-01')"
 ```
 
 ## 알아 둘 것
@@ -61,6 +67,8 @@ python -c "import run_login; run_login.check_ip('prof-01')"
   내려가 다음 실행에서 빠진다. 되살리는 건 사람이 어드민에서 한다.
 - 같은 IP 에서 계정을 연달아 로그인하지 않는다 (8~20초 사이를 둔다).
 - 같은 폴더를 두 번 동시에 열면 크롬이 폴더를 잠가 두 번째가 죽는다. 한 번에 하나씩 돌린다.
+- 윈도우 콘솔은 cp949 라 `—` 같은 글자가 출력에 섞이면 터진다. 화면에 찍는 문구에는
+  쓰지 않고, 출력을 파일로 넘길 때를 대비해 `run_login.py` 가 stdout 을 utf-8 로 돌려 둔다.
 
 ## 아직 없는 것
 
