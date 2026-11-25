@@ -117,7 +117,10 @@ def run_profile(
     print()
     print(f"[{profile.name}] 아이디 {len(profile.accounts)}개")
     if not profile.accounts:
-        print("  붙은 아이디가 없습니다 (네이버 계정 화면에서 프로필 이름을 적어주세요)")
+        # 찍고가 쓸 수 있는 계정만 내려주므로, 여기서는 두 경우를 구분할 수 없다
+        print("  돌릴 아이디가 없습니다")
+        print("     - 네이버 계정 화면에서 블로그 프로필 칸에 이 이름을 적었는지")
+        print("     - 그 아이디가 '사용 불가' 로 꺼져 있지는 않은지")
         return
     if len(profile.accounts) > 1:
         # 프로필 하나에 아이디 하나가 원칙이다. 어긋났으면 알리고 그대로 돈다
