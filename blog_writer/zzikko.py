@@ -58,12 +58,15 @@ class Zzikko:
         for row in res.json().get("items", []):
             out.append(
                 Profile(
+                    id=row["id"],
                     name=row["name"],
                     proxy_host=row.get("proxyHost") or "",
                     proxy_port=row.get("proxyPort"),
                     proxy_user=row.get("proxyUser") or "",
                     proxy_pass=row.get("proxyPass") or "",
                     user_agent=row.get("userAgent") or "",
+                    expected_ip=row.get("expectedIp") or "",
+                    vpn_location=row.get("vpnLocation") or "",
                     accounts=[
                         Account(
                             id=a["id"],
@@ -76,6 +79,15 @@ class Zzikko:
                 )
             )
         return out
+
+    # ------------------------------------------------------------------
+    def record_ip(self, profile: Profile, ip: str) -> None:
+        """브라우저에서 잰 IP 를 그 프로필에 적어 둔다 (찍고가 비어 있을 때만 받는다)."""
+        res = self.session.post(
+            f"{self.base}/admin/blog/profiles/{profile.id}/ip", json={"ip": ip}, timeout=20
+        )
+        if not res.ok:
+            raise ZzikkoError(f"IP 를 기록하지 못했습니다({res.status_code}): {self._message(res)}")
 
     # ------------------------------------------------------------------
     def report_login(self, account: Account, ok: bool, profile: str | None = None) -> None:

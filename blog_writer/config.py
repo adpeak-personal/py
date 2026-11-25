@@ -36,6 +36,9 @@ class Settings:
     admin_email: str
     admin_password: str
     headless: bool = False
+    # VPN 자동 전환 (비우면 사람이 직접 바꾼다). {location} 자리에 프로필의 VPN 위치가 들어간다
+    vpn_command: str = ""
+    vpn_wait_seconds: int = 8
 
     @classmethod
     def load(cls, path: Path = SETTINGS_FILE) -> "Settings":
@@ -53,6 +56,8 @@ class Settings:
             admin_email=data["admin_email"],
             admin_password=data["admin_password"],
             headless=bool(data.get("headless", False)),
+            vpn_command=str(data.get("vpn_command", "") or ""),
+            vpn_wait_seconds=int(data.get("vpn_wait_seconds", 8)),
         )
 
 
@@ -68,14 +73,24 @@ class Account:
 
 @dataclass
 class Profile:
-    """IP(프록시) 하나와 크롬 프로필 하나가 한 쌍. 계정 여럿이 여기 붙는다."""
+    """IP 하나와 크롬 프로필 하나가 한 쌍. 계정 여럿이 여기 붙는다.
 
+    IP 를 쓰는 길이 두 가지다. **프록시**(`proxy_host`)를 적으면 브라우저만 그 서버를
+    거쳐 나가고, 비워 두면 **지금 PC 가 쓰는 회선**(VPN 포함) 그대로 나간다.
+    어느 쪽이든 `expected_ip` 와 실제로 보이는 IP 가 같아야 작업을 시작한다.
+    """
+
+    id: int
     name: str
     proxy_host: str = ""
     proxy_port: int | None = None
     proxy_user: str = ""
     proxy_pass: str = ""
     user_agent: str = ""
+    # 이 프로필일 때 밖에서 보여야 할 IP. 비어 있으면 첫 작업 때 기록한다
+    expected_ip: str = ""
+    # VPN 에서 고를 자리 이름 (자동 전환에 쓴다)
+    vpn_location: str = ""
     accounts: list[Account] = field(default_factory=list)
 
     def dir_for(self, account: "Account") -> Path:

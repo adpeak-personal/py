@@ -1,13 +1,16 @@
-"""로그인까지만 — 초안.
+"""로그인까지 — IP 를 먼저 확인하고 돌린다.
 
-하는 일:
-  1. 찍고에 운영진으로 들어가 프로필(IP) 과 계정을 받는다
-  2. 프로필마다, 그 안의 아이디마다 크롬을 열고 로그인한다
-  3. 결과를 찍고에 보고한다 (실패한 아이디는 '쓸 수 없음'으로 내려간다)
+흐름:
+  1. 찍고에서 프로필(기대 IP) 과 계정을 받는다
+  2. 브라우저로 **지금 밖에서 보이는 IP** 를 잰다
+  3. 그 IP 가 기대 IP 인 프로필을 찾는다 — 없으면 멈춘다
+  4. 그 프로필의 아이디를 차례로 로그인한다 (아이디마다 IP 를 다시 잰다)
+  5. 다음 프로필 차례가 되면 VPN 을 바꾸라고 하고 기다린다
 
-글쓰기·발행은 아직 없다. 여기까지가 바탕이다.
+⚠️ **IP 가 맞지 않으면 로그인하지 않는다.** 엉뚱한 IP 로 한 번 로그인하면 그 계정이
+   그 IP 에 묶여 버린다. 틀린 채로 도는 것보다 멈추는 게 낫다.
 
-    python run_login.py                # 전부
+    python run_login.py                # 프로필 전부 (하나씩, VPN 바꿔 가며)
     python run_login.py prof-01        # 그 프로필만
 """
 from __future__ import annotations
@@ -23,27 +26,42 @@ for stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from browser import current_ip, launch
+from browser import launch, measure_ip
 from config import Account, Profile, Settings
-from naver_login import FAILED, NEED_HUMAN, OK, login
+from naver_login import FAILED, NEED_HUMAN, OK, login, logged_in
+from vpn import switch_vpn
 from zzikko import Zzikko, ZzikkoError
 
 # 아이디 사이에 쉬는 시간. 같은 IP 에서 쉼 없이 셋을 연달아 로그인하지 않는다
 PAUSE_RANGE = (8, 20)
 
 
+def current_ip(profile: Profile, settings: Settings) -> str | None:
+    """지금 밖에서 보이는 IP. 프로필의 프록시 설정을 그대로 태워서 잰다."""
+    probe = Account(id=0, login_id="_ip", password="")
+    try:
+        with launch(profile, probe, headless=True) as context:
+            return measure_ip(context)
+    except Exception as error:
+        print(f"  IP 를 재지 못했습니다. {type(error).__name__}: {error}")
+        return None
+
+
 def run_account(profile: Profile, account: Account, settings: Settings, api: Zzikko) -> str:
     with launch(profile, account, headless=settings.headless) as context:
+        # 작업 직전에 한 번 더 확인한다 — 도중에 VPN 이 끊기면 사무실 IP 로 글을 쓰게 된다
+        seen = measure_ip(context)
+        if profile.expected_ip and seen != profile.expected_ip:
+            print(f"  {account.login_id}: IP 가 {seen} 로 바뀌었습니다. 건너뜁니다")
+            return NEED_HUMAN
+
         result = login(context, account)
 
         if result == NEED_HUMAN:
             # 창을 띄워 둔 채 사람이 풀 때까지 기다린다. 자동으로 뚫지 않는다.
-            input("     → 창에서 확인을 마친 뒤 Enter 를 누르세요 (건너뛰려면 그냥 Enter): ")
+            input("     > 창에서 확인을 마친 뒤 Enter (건너뛰려면 그냥 Enter): ")
             page = context.pages[0] if context.pages else None
-            if page is not None:
-                from naver_login import logged_in
-
-                result = OK if logged_in(page, timeout=5) else NEED_HUMAN
+            result = OK if page is not None and logged_in(page, timeout=5) else NEED_HUMAN
 
         # 사람 확인이 필요했던 건 '실패'로 적지 않는다 — 아이디가 막힌 게 아니다
         if result in (OK, FAILED):
@@ -52,6 +70,47 @@ def run_account(profile: Profile, account: Account, settings: Settings, api: Zzi
             except ZzikkoError as error:
                 print(f"     보고 실패: {error}")
         return result
+
+
+def run_profile(profile: Profile, settings: Settings, api: Zzikko, tally: dict[str, int]) -> None:
+    print(f"\n[{profile.name}] 계정 {len(profile.accounts)}개")
+    if not profile.accounts:
+        print("  붙은 계정이 없습니다 (네이버 계정 화면에서 프로필 이름을 적어주세요)")
+        return
+
+    # ── VPN 을 이 프로필 자리로 옮긴다 (자동이면 명령으로, 아니면 사람에게 부탁)
+    switch_vpn(profile, settings)
+
+    seen = current_ip(profile, settings)
+    if seen is None:
+        return
+
+    if not profile.expected_ip:
+        # 처음이면 지금 IP 를 그 프로필의 것으로 적어 둔다 (손으로 적다 오타 나는 걸 막는다)
+        print(f"  지금 IP {seen} 를 이 프로필의 IP 로 기록합니다")
+        try:
+            api.record_ip(profile, seen)
+        except ZzikkoError as error:
+            print(f"  기록 실패: {error}")
+        profile.expected_ip = seen
+    elif seen != profile.expected_ip:
+        print(f"  !! IP 가 맞지 않습니다, 지금 {seen} / 이 프로필은 {profile.expected_ip}")
+        print("     VPN 을 이 프로필 자리로 바꾸고 다시 돌려주세요. 로그인하지 않습니다.")
+        return
+    else:
+        print(f"  IP 확인 {seen}")
+
+    for index, account in enumerate(profile.accounts):
+        if index:
+            pause = random.uniform(*PAUSE_RANGE)
+            print(f"  {pause:.0f}초 쉬는 중...")
+            time.sleep(pause)
+        try:
+            result = run_account(profile, account, settings, api)
+        except Exception as error:  # 한 계정이 넘어져도 나머지는 돌린다
+            print(f"  {account.login_id}: 열지 못했습니다. {type(error).__name__}: {error}")
+            result = FAILED
+        tally[result] = tally.get(result, 0) + 1
 
 
 def main() -> int:
@@ -72,37 +131,28 @@ def main() -> int:
         return 1
 
     if not profiles:
-        print("돌릴 프로필이 없습니다. 찍고 어드민 → 블로그 프로필에서 추가해 주세요.")
+        print("돌릴 프로필이 없습니다. 찍고 어드민 > 블로그 프로필에서 추가해 주세요.")
         return 1
 
     tally = {OK: 0, FAILED: 0, NEED_HUMAN: 0}
-
-    for profile in profiles:
-        print(f"\n[{profile.name}] 계정 {len(profile.accounts)}개"
-              f"{' · IP ' + profile.proxy_host if profile.proxy_host else ' · 직접 연결'}")
-        if not profile.accounts:
-            print("  붙은 계정이 없습니다 (네이버 계정 화면에서 프로필 이름을 적어주세요)")
-            continue
-
-        for index, account in enumerate(profile.accounts):
-            if index:
-                pause = random.uniform(*PAUSE_RANGE)
-                print(f"  {pause:.0f}초 쉬는 중…")
-                time.sleep(pause)
-
-            try:
-                result = run_account(profile, account, settings, api)
-            except Exception as error:  # 한 계정이 넘어져도 나머지는 돌린다
-                print(f"  {account.login_id}: 열지 못했습니다. {type(error).__name__}: {error}")
-                result = FAILED
-            tally[result] = tally.get(result, 0) + 1
+    for index, profile in enumerate(profiles):
+        run_profile(profile, settings, api, tally)
+        if index < len(profiles) - 1 and not settings.vpn_command:
+            # 자동 전환이 없으면 다음 프로필 전에 사람이 VPN 을 바꿔야 한다
+            nxt = profiles[index + 1]
+            where = f" ({nxt.vpn_location})" if nxt.vpn_location else ""
+            if input(f"\n다음은 [{nxt.name}]{where} 입니다. VPN 을 바꾸고 Enter (그만두려면 q): ").strip().lower() == "q":
+                break
 
     print(f"\n끝났습니다. 성공 {tally[OK]} · 실패 {tally[FAILED]} · 사람 확인 필요 {tally[NEED_HUMAN]}")
     return 0
 
 
 def check_ip(profile_name: str) -> None:
-    """프록시가 제대로 물렸는지만 보고 싶을 때: python -c "import run_login; run_login.check_ip('prof-01')" """
+    """프록시·VPN 이 제대로 물렸는지만 본다.
+
+    python -c "import run_login; run_login.check_ip('prof-01')"
+    """
     settings = Settings.load()
     api = Zzikko(settings)
     api.login()
@@ -111,9 +161,10 @@ def check_ip(profile_name: str) -> None:
         print(f"프로필 {profile_name} 을 찾지 못했습니다")
         return
     profile = profiles[0]
-    probe = profile.accounts[0] if profile.accounts else Account(id=0, login_id="_ip_check", password="")
-    with launch(profile, probe, headless=True) as context:
-        print(f"{profile.name} → {current_ip(context)}")
+    seen = current_ip(profile, settings)
+    expected = profile.expected_ip or "(아직 없음)"
+    mark = "" if not profile.expected_ip else (" 맞음" if seen == profile.expected_ip else " 다름!")
+    print(f"{profile.name}: 지금 {seen} / 기대 {expected}{mark}")
 
 
 if __name__ == "__main__":

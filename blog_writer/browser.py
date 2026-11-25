@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 
 from playwright.sync_api import BrowserContext, sync_playwright
@@ -61,18 +62,18 @@ def launch(profile: Profile, account: Account, headless: bool = False):
             context.close()
 
 
-def current_ip(context: BrowserContext) -> str:
-    """지금 이 프로필이 어떤 IP 로 나가는지 확인한다.
+def measure_ip(context: BrowserContext) -> str | None:
+    """지금 이 브라우저가 밖에서 어떤 IP 로 보이는지.
 
-    프록시가 제대로 물렸는지 눈으로 보려고 쓴다. 실패해도 작업은 계속한다.
+    **파이썬이 아니라 브라우저로 잰다** — 네이버가 실제로 보게 될 IP 가 이것이기 때문이다.
+    프록시를 쓰면 PC 의 IP 와 다르다.
     """
     page = context.new_page()
     try:
-        page.goto("https://api.ipify.org?format=json", wait_until="domcontentloaded", timeout=15000)
-        import json
-
+        page.goto("https://api.ipify.org?format=json", wait_until="domcontentloaded", timeout=20000)
         return str(json.loads(page.inner_text("pre, body"))["ip"])
-    except Exception as error:  # 네트워크·형식 무엇이든 확인용이라 치명적이지 않다
-        return f"확인 실패 ({type(error).__name__})"
+    except Exception as error:  # 네트워크·형식 무엇이든 — 모르면 작업하지 않는 게 맞다
+        print(f"  IP 확인 실패 ({type(error).__name__})")
+        return None
     finally:
         page.close()

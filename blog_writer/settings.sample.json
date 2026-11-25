@@ -2,5 +2,10 @@
   "api_base": "https://zzikko.co.kr",
   "admin_email": "운영진 이메일",
   "admin_password": "운영진 비밀번호",
-  "headless": false
+  "headless": false,
+
+  "_vpn": "VPN 을 자동으로 바꾸려면 아래를 채운다. 비우면 사람이 직접 바꾸고 Enter 를 누른다.",
+  "_vpn_example": "nordvpn.exe -c -n \"{location}\"  /  mullvad relay set location {location}",
+  "vpn_command": "",
+  "vpn_wait_seconds": 8
 }
