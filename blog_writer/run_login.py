@@ -114,20 +114,14 @@ def run_account(
 def run_profile(
     profile: Profile, settings: Settings, api: Zzikko, tally: dict[str, int], shot: bool = False, keep: bool = False
 ) -> None:
-    todays = profile.todays
-    if profile.current_account_id is not None:
-        print()
-        print(f"[{profile.name}] 고른 아이디 하나만 돌립니다 (붙은 것 {len(profile.accounts)}개)")
-    else:
-        print()
-        print(f"[{profile.name}] 계정 {len(profile.accounts)}개")
-
+    print()
+    print(f"[{profile.name}] 아이디 {len(profile.accounts)}개")
     if not profile.accounts:
-        print("  붙은 계정이 없습니다 (네이버 계정 화면에서 프로필 이름을 적어주세요)")
+        print("  붙은 아이디가 없습니다 (네이버 계정 화면에서 프로필 이름을 적어주세요)")
         return
-    if not todays:
-        print("  고른 아이디가 '쓸 수 없음'으로 꺼져 있습니다. 어드민에서 다시 골라주세요")
-        return
+    if len(profile.accounts) > 1:
+        # 프로필 하나에 아이디 하나가 원칙이다. 어긋났으면 알리고 그대로 돈다
+        print("  !! 아이디가 여러 개 붙어 있습니다. 어드민에서 하나만 남겨주세요")
 
     # ── VPN 을 이 프로필 자리로 옮긴다 (자동이면 명령으로, 아니면 사람에게 부탁)
     switch_vpn(profile, settings)
@@ -151,7 +145,7 @@ def run_profile(
     else:
         print(f"  IP 확인 {seen}")
 
-    for index, account in enumerate(todays):
+    for index, account in enumerate(profile.accounts):
         if index:
             pause = random.uniform(*PAUSE_RANGE)
             print(f"  {pause:.0f}초 쉬는 중...")
@@ -200,10 +194,15 @@ def main() -> int:
     for index, profile in enumerate(profiles):
         run_profile(profile, settings, api, tally, shot, keep)
         if index < len(profiles) - 1 and not settings.vpn_command:
-            # 자동 전환이 없으면 다음 프로필 전에 사람이 VPN 을 바꿔야 한다
             nxt = profiles[index + 1]
+            # 다음 프로필이 **같은 IP** 면 VPN 을 그대로 둬도 된다 (목록이 IP 순으로 온다)
+            if nxt.expected_ip and nxt.expected_ip == profile.expected_ip:
+                print(f"  다음 [{nxt.name}] 도 같은 IP 입니다. VPN 그대로 이어갑니다")
+                continue
             where = f" ({nxt.vpn_location})" if nxt.vpn_location else ""
-            if input(f"\n다음은 [{nxt.name}]{where} 입니다. VPN 을 바꾸고 Enter (그만두려면 q): ").strip().lower() == "q":
+            print()
+            answer = input(f"다음은 [{nxt.name}]{where} 입니다. VPN 을 바꾸고 Enter (그만두려면 q): ")
+            if answer.strip().lower() == "q":
                 break
 
     print(f"\n끝났습니다. 성공 {tally[OK]} · 실패 {tally[FAILED]} · 사람 확인 필요 {tally[NEED_HUMAN]}")
