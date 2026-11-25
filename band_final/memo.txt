@@ -1,3 +1,0 @@
-pyinstaller.exe -F -n=bandAuto_mix main.py
-
-pyinstaller.exe -F main.py

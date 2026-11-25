@@ -1,1 +1,0 @@
-pyinstaller.exe -F -n=img_semi_auto main.py

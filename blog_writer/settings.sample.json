@@ -1,0 +1,6 @@
+{
+  "api_base": "https://zzikko.co.kr",
+  "admin_email": "운영진 이메일",
+  "admin_password": "운영진 비밀번호",
+  "headless": false
+}
