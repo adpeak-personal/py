@@ -39,6 +39,7 @@ PAUSE_RANGE = (8, 20)
 def current_ip(profile: Profile, settings: Settings) -> str | None:
     """지금 밖에서 보이는 IP. 프로필의 프록시 설정을 그대로 태워서 잰다."""
     probe = Account(id=0, login_id="_ip", password="")
+    print("  IP 를 재는 중... (크롬을 잠깐 띄웁니다. 창은 안 보입니다)")
     try:
         with launch(profile, probe, headless=True) as context:
             return measure_ip(context)
@@ -48,6 +49,7 @@ def current_ip(profile: Profile, settings: Settings) -> str | None:
 
 
 def run_account(profile: Profile, account: Account, settings: Settings, api: Zzikko) -> str:
+    print(f"  {account.login_id}: 크롬 창을 엽니다...")
     with launch(profile, account, headless=settings.headless) as context:
         # 작업 직전에 한 번 더 확인한다 — 도중에 VPN 이 끊기면 사무실 IP 로 글을 쓰게 된다
         seen = measure_ip(context)
@@ -59,7 +61,11 @@ def run_account(profile: Profile, account: Account, settings: Settings, api: Zzi
 
         if result == NEED_HUMAN:
             # 창을 띄워 둔 채 사람이 풀 때까지 기다린다. 자동으로 뚫지 않는다.
-            input("     > 창에서 확인을 마친 뒤 Enter (건너뛰려면 그냥 Enter): ")
+            print("     ---------------------------------------------------")
+            print("     크롬 창에서 직접 확인을 끝내 주세요 (창이 뒤에 숨어 있을 수 있습니다)")
+            print("     프로그램은 여기서 사장님을 기다립니다. 멈춘 게 아닙니다.")
+            print("     ---------------------------------------------------")
+            input("     끝나면 Enter (건너뛰려면 그냥 Enter): ")
             page = context.pages[0] if context.pages else None
             result = OK if page is not None and logged_in(page, timeout=5) else NEED_HUMAN
 

@@ -63,6 +63,7 @@ def login(context: BrowserContext, account: Account, timeout: int = 15, log: Log
     """OK / NEED_HUMAN / FAILED 중 하나를 돌려준다."""
     page = context.pages[0] if context.pages else context.new_page()
 
+    log(f"  {account.login_id}: 네이버를 여는 중...")
     page.goto(NAVER_URL, wait_until="domcontentloaded")
     if logged_in(page, timeout=5):
         log(f"  {account.login_id}: 이미 로그인되어 있음 (쿠키 유지)")
