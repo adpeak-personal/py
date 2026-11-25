@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import json
+import time
 from contextlib import contextmanager
+from pathlib import Path
 
 from playwright.sync_api import BrowserContext, sync_playwright
 
@@ -77,3 +79,32 @@ def measure_ip(context: BrowserContext) -> str | None:
         return None
     finally:
         page.close()
+
+
+# 찍은 화면이 쌓이는 곳 (git 에 올라가지 않는다)
+SHOT_DIR = Path(__file__).resolve().parent / "shots"
+
+
+def save_shot(context: BrowserContext, name: str) -> str | None:
+    """지금 창을 사진으로 남긴다.
+
+    막힌 자리를 눈으로 봐야 할 때 쓴다 — 캡차인지, 기기 등록인지, 비밀번호 오류인지는
+    글자만으로는 구분이 안 된다.
+
+    ⚠️ **로그인된 화면이 그대로 찍힌다.** 이 폴더는 이 PC 에만 두고 올리지 않는다.
+    """
+    # 빈 탭(about:blank)이 아니라 **실제로 뭘 띄우고 있는 탭**을 찍는다.
+    # persistent context 는 시작할 때 빈 탭을 하나 들고 있어서, pages[0] 을 찍으면 흰 화면이 나온다.
+    pages = [pg for pg in context.pages if not pg.url.startswith("about:")]
+    page = pages[-1] if pages else (context.pages[0] if context.pages else None)
+    if page is None:
+        return None
+    SHOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = SHOT_DIR / f"{time.strftime('%m%d-%H%M%S')}-{name}.png"
+    try:
+        page.wait_for_timeout(400)  # 그리는 중에 찍히지 않게 잠깐 둔다
+        page.screenshot(path=str(path), full_page=False)
+        return str(path)
+    except Exception as error:
+        print(f"  화면을 찍지 못했습니다 ({type(error).__name__})")
+        return None

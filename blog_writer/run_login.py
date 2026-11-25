@@ -12,6 +12,7 @@
 
     python run_login.py                # 프로필 전부 (하나씩, VPN 바꿔 가며)
     python run_login.py prof-01        # 그 프로필만
+    python run_login.py prof-01 --shot # 성공해도 화면을 shots/ 에 남긴다
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ for stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from browser import launch, measure_ip
+from browser import launch, measure_ip, save_shot
 from config import Account, Profile, Settings
 from naver_login import FAILED, NEED_HUMAN, OK, login, logged_in
 from vpn import switch_vpn
@@ -48,7 +49,7 @@ def current_ip(profile: Profile, settings: Settings) -> str | None:
         return None
 
 
-def run_account(profile: Profile, account: Account, settings: Settings, api: Zzikko) -> str:
+def run_account(profile: Profile, account: Account, settings: Settings, api: Zzikko, shot: bool = False) -> str:
     print(f"  {account.login_id}: 크롬 창을 엽니다...")
     with launch(profile, account, headless=settings.headless) as context:
         # 작업 직전에 한 번 더 확인한다 — 도중에 VPN 이 끊기면 사무실 IP 로 글을 쓰게 된다
@@ -59,6 +60,12 @@ def run_account(profile: Profile, account: Account, settings: Settings, api: Zzi
 
         result = login(context, account)
 
+        # 막힌 자리는 사진으로 남긴다 — 글자만으로는 캡차인지 기기등록인지 모른다
+        if shot or result != OK:
+            path = save_shot(context, f"{account.login_id}-{result}")
+            if path:
+                print(f"     화면을 남겼습니다: {path}")
+
         if result == NEED_HUMAN:
             # 창을 띄워 둔 채 사람이 풀 때까지 기다린다. 자동으로 뚫지 않는다.
             print("     ---------------------------------------------------")
@@ -68,6 +75,9 @@ def run_account(profile: Profile, account: Account, settings: Settings, api: Zzi
             input("     끝나면 Enter (건너뛰려면 그냥 Enter): ")
             page = context.pages[0] if context.pages else None
             result = OK if page is not None and logged_in(page, timeout=5) else NEED_HUMAN
+            after = save_shot(context, f"{account.login_id}-after")
+            if after:
+                print(f"     확인 뒤 화면: {after}")
 
         # 사람 확인이 필요했던 건 '실패'로 적지 않는다 — 아이디가 막힌 게 아니다
         if result in (OK, FAILED):
@@ -78,7 +88,7 @@ def run_account(profile: Profile, account: Account, settings: Settings, api: Zzi
         return result
 
 
-def run_profile(profile: Profile, settings: Settings, api: Zzikko, tally: dict[str, int]) -> None:
+def run_profile(profile: Profile, settings: Settings, api: Zzikko, tally: dict[str, int], shot: bool = False) -> None:
     print(f"\n[{profile.name}] 계정 {len(profile.accounts)}개")
     if not profile.accounts:
         print("  붙은 계정이 없습니다 (네이버 계정 화면에서 프로필 이름을 적어주세요)")
@@ -112,7 +122,7 @@ def run_profile(profile: Profile, settings: Settings, api: Zzikko, tally: dict[s
             print(f"  {pause:.0f}초 쉬는 중...")
             time.sleep(pause)
         try:
-            result = run_account(profile, account, settings, api)
+            result = run_account(profile, account, settings, api, shot)
         except Exception as error:  # 한 계정이 넘어져도 나머지는 돌린다
             print(f"  {account.login_id}: 열지 못했습니다. {type(error).__name__}: {error}")
             result = FAILED
@@ -120,7 +130,10 @@ def run_profile(profile: Profile, settings: Settings, api: Zzikko, tally: dict[s
 
 
 def main() -> int:
-    only = sys.argv[1] if len(sys.argv) > 1 else None
+    args = [a for a in sys.argv[1:] if a != "--shot"]
+    # --shot 을 붙이면 성공했을 때도 화면을 남긴다 (문제를 같이 들여다볼 때 쓴다)
+    shot = "--shot" in sys.argv
+    only = args[0] if args else None
 
     try:
         settings = Settings.load()
@@ -142,7 +155,7 @@ def main() -> int:
 
     tally = {OK: 0, FAILED: 0, NEED_HUMAN: 0}
     for index, profile in enumerate(profiles):
-        run_profile(profile, settings, api, tally)
+        run_profile(profile, settings, api, tally, shot)
         if index < len(profiles) - 1 and not settings.vpn_command:
             # 자동 전환이 없으면 다음 프로필 전에 사람이 VPN 을 바꿔야 한다
             nxt = profiles[index + 1]
