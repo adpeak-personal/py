@@ -22,8 +22,10 @@ Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
 window.chrome = window.chrome || {runtime: {}};
 """
 
-WINDOW_WIDTH = 1200
-WINDOW_HEIGHT = 800
+# 모바일 네이버를 띄우므로 창도 폰에 가깝게 둔다.
+# ⚠️ 너무 좁히지 않는다 — 마우스를 실제로 움직이므로 칸이 보일 만큼은 넓어야 한다.
+WINDOW_WIDTH = 500
+WINDOW_HEIGHT = 900
 
 LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
@@ -55,6 +57,8 @@ def launch(profile: Profile, account: Account, headless: bool = False):
             user_agent=profile.agent,
             locale="ko-KR",
             timezone_id="Asia/Seoul",
+            # 손가락으로 만지는 기기인 척한다 — UA 만 모바일이고 터치가 없으면 어긋나 보인다
+            has_touch=True,
             no_viewport=True,
         )
         context.add_init_script(STEALTH_JS)

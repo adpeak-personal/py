@@ -23,10 +23,14 @@ SETTINGS_FILE = BASE_DIR / "settings.json"
 # 크롬 프로필이 쌓이는 곳. 프로필 하나가 폴더 하나다
 PROFILE_ROOT = BASE_DIR / "profiles"
 
-# 프로필에 User-Agent 를 안 적었을 때 쓰는 값
+# 프로필에 User-Agent 를 안 적었을 때 쓰는 값.
+#
+# ⚠️ **모바일이다.** 로그인을 m.naver.com 에서 하기 때문이다 — PC 로그인 화면에서
+# 보호조치가 계속 걸려서 옛 프로그램(blog_auto_server_mix)이 쓰던 길로 돌아왔다.
+# 계정마다 다르게 주고 싶으면 어드민의 User-Agent 칸에 적으면 이 값을 덮는다.
 DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Linux; Android 14; SM-S918N) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 )
 
 
