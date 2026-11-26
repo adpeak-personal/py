@@ -25,8 +25,9 @@ PROFILE_ROOT = BASE_DIR / "profiles"
 
 # 프로필에 User-Agent 를 안 적었을 때 쓰는 값.
 #
-# ⚠️ **모바일이다.** 로그인을 m.naver.com 에서 하기 때문이다 — PC 로그인 화면에서
-# 보호조치가 계속 걸려서 옛 프로그램(blog_auto_server_mix)이 쓰던 길로 돌아왔다.
+# ⚠️ **로그인하는 동안만 쓰는 폰 UA 다.** 브라우저는 크롬 본래의 PC 모습으로 켜고,
+# 로그인만 m.naver.com 에서 하면서 이 UA 로 바꿔 든다 (`browser.to_mobile`).
+# 끝나면 PC 로 되돌린다 — PC 의 UA 는 크롬이 알아서 보내므로 따로 적을 필요가 없다.
 # 계정마다 다르게 주고 싶으면 어드민의 User-Agent 칸에 적으면 이 값을 덮는다.
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Linux; Android 14; SM-S918N) AppleWebKit/537.36 "

@@ -1,8 +1,11 @@
-"""네이버 로그인 — **모바일(m.naver.com)에서 한다.**
+"""네이버 로그인 — **PC 로 들어가서, 폰으로 바꿔 로그인하고, 다시 PC 로 돌아온다.**
 
-옛 `blog_auto_server_mix` 가 쓰던 길을 그대로 옮겼다. 그쪽은 모바일 UA 로 크롬을 띄워
-`m.naver.com` 에서 로그인하고, 끝난 뒤 `naver.com`(PC)으로 옮겨 가 작업한다.
-PC 로그인 화면에서 보호조치가 계속 걸려서 바꾼 것이다.
+    PC 진입 → 모바일로 변경 → 로그인 → 다시 PC 로 변경
+
+PC 로그인 화면에서 보호조치가 계속 걸려서 로그인만 `m.naver.com` 에서 한다. 다만
+**브라우저가 처음부터 끝까지 폰인 척하지는 않는다** — 켤 때는 크롬 본래의 PC 모습으로
+들어가고, 로그인하는 동안만 UA·클라이언트 힌트·터치·창 크기를 폰으로 바꾸고
+(`browser.to_mobile`), 끝나면 PC 로 되돌린다(`browser.to_pc`). 글쓰기는 PC 화면에서 한다.
 
 ⚠️ **캡차·보호조치는 프로그램이 풀지 않는다.** 뜨면 멈추고 사람을 부른다.
    그게 맞기도 하고, 자동으로 뚫으려 들면 계정이 더 빨리 막힌다.
@@ -17,13 +20,15 @@ import pyperclip
 from playwright.sync_api import BrowserContext, Page, TimeoutError as PWTimeout
 
 import human
+from browser import to_mobile, to_pc
 from config import Account
 
 LogFn = Callable[[str], None]
 
-MOBILE_HOME = "https://m.naver.com"
-# 로그인이 끝나면 여기로 옮긴다. 글쓰기는 PC 화면에서 한다
+# 처음 들어가는 곳, 그리고 로그인이 끝나면 돌아오는 곳. 글쓰기는 PC 화면에서 한다
 PC_HOME = "https://www.naver.com"
+# 로그인만 여기서 한다
+MOBILE_HOME = "https://m.naver.com"
 
 # ── 모바일 네이버 선택자 (옛 프로그램에서 그대로) ──────────────
 # 오른쪽 위 메뉴 버튼. 네이버가 두 이름을 섞어 쓴다
@@ -205,28 +210,54 @@ def _after_submit(page: Page, account: Account, log: LogFn, timeout: int) -> str
     return NEED_HUMAN
 
 
-def login(context: BrowserContext, account: Account, timeout: int = 25, log: LogFn = print) -> str:
+def _back_to_pc(context: BrowserContext, page: Page, log: LogFn) -> None:
+    """폰 → PC. UA·터치·창 크기를 되돌리고 PC 메인으로 간다."""
+    log("     PC 버전으로 되돌립니다")
+    to_pc(context, page)
+    human.rest(0.8, 1.6)
+    page.goto(PC_HOME, wait_until="domcontentloaded")
+    human.rest(1.0, 2.0)
+
+
+def login(
+    context: BrowserContext,
+    account: Account,
+    timeout: int = 25,
+    log: LogFn = print,
+    mobile_agent: str = "",
+) -> str:
     """OK / NEED_HUMAN / FAILED 중 하나를 돌려준다.
 
-    끝에 **PC 화면으로 옮겨 둔다** — 글쓰기는 거기서 하기 때문이다.
+    PC 로 들어가 → 폰으로 바꿔 로그인 → 다시 PC. 끝에 **PC 화면으로 옮겨 둔다** —
+    글쓰기는 거기서 하기 때문이다. `mobile_agent` 는 로그인하는 동안만 쓸 폰 UA 다
+    (프로필에 적힌 것). 비워 두면 UA 는 그대로 두고 화면만 모바일로 간다.
     """
     page = context.pages[0] if context.pages else context.new_page()
 
-    log(f"  {account.login_id}: 모바일 네이버를 여는 중...")
+    # ── 1) PC 로 진입 ───────────────────────────────────
+    log(f"  {account.login_id}: PC 네이버를 여는 중...")
+    page.goto(PC_HOME, wait_until="domcontentloaded")
+    human.focus_window(page)
+    human.rest(1.5, 2.8)
+
+    # ── 2) 모바일로 변경 ────────────────────────────────
+    log(f"  {account.login_id}: 모바일 버전으로 바꿉니다")
+    to_mobile(context, page, mobile_agent)
+    human.rest(1.0, 2.0)
     page.goto(MOBILE_HOME, wait_until="domcontentloaded")
     human.focus_window(page)
     human.rest(1.2, 2.2)
 
     if logged_in(page, timeout=4):
         log(f"  {account.login_id}: 이미 로그인되어 있음 (쿠키 유지)")
-        page.goto(PC_HOME, wait_until="domcontentloaded")
+        _back_to_pc(context, page, log)
         return OK
 
     log(f"  {account.login_id}: 로그인 화면으로")
     if not _open_login_form(page, log):
         if logged_in(page, timeout=3):
             log(f"  {account.login_id}: 이미 로그인되어 있음")
-            page.goto(PC_HOME, wait_until="domcontentloaded")
+            _back_to_pc(context, page, log)
             return OK
         log(f"  {account.login_id}: 로그인 화면을 찾지 못했습니다")
         human.call_human()
@@ -253,6 +284,7 @@ def login(context: BrowserContext, account: Account, timeout: int = 25, log: Log
 
     result = _after_submit(page, account, log, timeout)
     if result == OK:
+        # ── 4) 다시 PC 로 변경 ──────────────────────────
         log(f"  {account.login_id}: 로그인 성공")
-        page.goto(PC_HOME, wait_until="domcontentloaded")
+        _back_to_pc(context, page, log)
     return result

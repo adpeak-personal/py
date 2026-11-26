@@ -29,7 +29,7 @@ for stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from browser import launch, measure_ip, save_shot
+from browser import launch, measure_ip, save_shot, to_pc
 import shutil
 
 from config import PROFILE_ROOT, Account, Profile, Settings
@@ -116,7 +116,8 @@ def run_account(
             say(f"  {account.login_id}: IP 가 {seen} 로 바뀌었습니다. 건너뜁니다")
             return NEED_HUMAN
 
-        result = login(context, account, log=say)
+        # 로그인하는 동안만 쓸 폰 UA 를 넘긴다 (PC → 모바일 → PC)
+        result = login(context, account, log=say, mobile_agent=profile.agent)
 
         # 막힌 자리는 사진으로 남긴다 — 글자만으로는 캡차인지 기기등록인지 모른다
         if shot or result != OK:
@@ -133,6 +134,11 @@ def run_account(
             ask("     끝나면 Enter (건너뛰려면 그냥 Enter): ")
             page = context.pages[0] if context.pages else None
             result = OK if page is not None and logged_in(page, timeout=5) else NEED_HUMAN
+            if result == OK and page is not None:
+                # 사람이 풀어 준 경우에도 PC 로 돌려 둔다 — 글쓰기는 PC 화면에서 한다
+                say("     PC 버전으로 되돌립니다")
+                to_pc(context, page)
+                page.goto("https://www.naver.com", wait_until="domcontentloaded")
             after = save_shot(context, f"{account.login_id}-after")
             if after:
                 say(f"     확인 뒤 화면: {after}")
