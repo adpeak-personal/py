@@ -29,8 +29,12 @@ for stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-from browser import launch, measure_ip, save_shot, to_pc
+import os
 import shutil
+import stat
+from pathlib import Path
+
+from browser import launch, measure_ip, save_shot, to_pc
 
 from config import PROFILE_ROOT, Account, Profile, Settings
 from naver_login import FAILED, NEED_HUMAN, OK, login, logged_in
@@ -103,6 +107,23 @@ def hold(label: str) -> None:
             # 창을 못 띄우면 터미널로 묻는다
             ask("     확인을 마쳤으면 Enter: ")
     say("     창을 닫습니다")
+
+
+def finish_alert(message: str) -> None:
+    """다 끝났다고 **창 하나 띄우고 기다린다.**
+
+    검은 창이 그냥 닫혀 버리면 결과를 볼 틈이 없다. 터미널에서는 `pyautogui.alert`,
+    화면(`gui.py`)에서는 그쪽 창이 뜬다.
+    """
+    if stop_flag is not None:
+        ask(message)
+        return
+    try:
+        import pyautogui
+
+        pyautogui.alert(text=message, title="블로그 작업기 — 끝")
+    except Exception:
+        ask("확인을 마쳤으면 Enter: ")
 
 
 def run_account(
@@ -208,38 +229,79 @@ def run_profile(
         tally[result] = tally.get(result, 0) + 1
 
 
-def clean_pending(api: Zzikko) -> None:
-    """찍고에서 '삭제' 로 표시한 프로필을 치운다.
+def _unlock(func, path, _error=None) -> None:
+    """읽기 전용 파일이 걸리면 표시를 떼고 다시 지운다 (윈도우에서 흔하다)."""
+    try:
+        os.chmod(path, stat.S_IWRITE)
+    except OSError:
+        pass
+    func(path)
+
+
+def remove_folder(folder: "Path", name: str) -> bool:
+    """크롬 프로필 폴더를 지운다.
+
+    ⚠️ 크롬이 막 닫혔으면 폴더가 잠깐 잠겨 있다. 한 번 실패했다고 포기하지 않고
+    쉬었다 몇 번 더 해 본다 — 여기서 포기하면 로그인된 쿠키가 PC 에 남는다.
+    """
+    if not folder.exists():
+        say(f"  {name}: 폴더가 없습니다 (이 PC 에서 안 돌린 프로필)")
+        return True
+    for attempt in (1, 2, 3):
+        try:
+            shutil.rmtree(folder, onexc=_unlock)
+            say(f"  {name}: 폴더 지움 ({folder})")
+            return True
+        except Exception as error:
+            say(f"  {name}: 폴더가 잠겨 있습니다 ({attempt}/3) {type(error).__name__}")
+            nap(2.0)
+    say(f"  {name}: 폴더를 지우지 못했습니다 — 크롬 창을 모두 닫고 다시 돌려주세요")
+    say("     목록에는 그대로 둡니다 (다음 번에 다시 지웁니다)")
+    return False
+
+
+def clean_pending(api: Zzikko) -> int:
+    """찍고에서 '삭제 대기' 로 돌려 둔 프로필을 치운다. 치운 개수를 돌려준다.
 
     **폴더를 먼저 지우고 행을 지운다.** 순서가 바뀌면 표시가 사라져서 폴더가 영영 남는다
     (그 안에 로그인된 쿠키가 들어 있다). 폴더를 못 지우면 행도 두고 다음 번에 다시 시도한다.
+
+    ⚠️ **아무것도 없을 때도 말한다.** 조용히 지나가면 "삭제가 안 된다" 와
+    "지울 게 없다" 가 구분되지 않는다.
     """
     try:
         pending = api.pending_delete()
     except ZzikkoError as error:
         say(f"치울 목록을 받지 못했습니다: {error}")
-        return
+        return 0
     if not pending:
-        return
+        say("지울 프로필 없음 (어드민에서 상태를 '삭제 대기' 로 바꿔 두면 여기서 지웁니다)")
+        return 0
 
-    say(f"지우기로 표시된 프로필 {len(pending)}개를 치웁니다")
+    say(f"'삭제 대기' 프로필 {len(pending)}개를 치웁니다: {', '.join(n for _, n in pending)}")
+    done = 0
     for profile_id, name in pending:
-        folder = PROFILE_ROOT / name
-        try:
-            if folder.exists():
-                shutil.rmtree(folder)
-                say(f"  {name}: 폴더 지움")
-            else:
-                say(f"  {name}: 폴더가 없습니다 (이 PC 에서 안 돌린 프로필)")
-        except Exception as error:
-            # 크롬이 떠 있으면 폴더가 잠겨 있다. 행을 남겨 다음 번에 다시 한다
-            say(f"  {name}: 폴더를 지우지 못했습니다. {type(error).__name__}: {error}")
+        if not remove_folder(PROFILE_ROOT / name, name):
             continue
         try:
             api.delete_profile(profile_id)
-            say(f"  {name}: 목록에서 지움")
+            say(f"  {name}: 찍고 목록에서도 지움")
+            done += 1
         except ZzikkoError as error:
-            say(f"  {name}: 목록에서 지우지 못했습니다. {error}")
+            say(f"  {name}: 찍고 목록에서 지우지 못했습니다. {error}")
+    return done
+
+
+def clean_only() -> int:
+    """지우는 것만 한다 — 프로그램을 켤 때와 '삭제 처리' 버튼이 부른다."""
+    try:
+        settings = Settings.load()
+        api = Zzikko(settings)
+        api.login()
+    except (FileNotFoundError, ValueError, ZzikkoError) as error:
+        say(f"찍고에 붙지 못해 삭제를 건너뜁니다: {error}")
+        return 0
+    return clean_pending(api)
 
 
 def run(only: str | None = None, shot: bool = False, keep: bool = True) -> int:
@@ -294,7 +356,12 @@ def run(only: str | None = None, shot: bool = False, keep: bool = True) -> int:
             if answer.strip().lower() == "q":
                 break
 
-    say(f"\n끝났습니다. 성공 {tally[OK]} · 실패 {tally[FAILED]} · 사람 확인 필요 {tally[NEED_HUMAN]}")
+    summary = f"끝났습니다. 성공 {tally[OK]} · 실패 {tally[FAILED]} · 사람 확인 필요 {tally[NEED_HUMAN]}"
+    say("")
+    say(summary)
+    if keep:
+        # 이것저것 다 끝났으면 창 하나 띄우고 멈춘다 (눈으로 보라고)
+        finish_alert(summary)
     return 0
 
 

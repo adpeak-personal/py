@@ -43,6 +43,12 @@ LOGGED_IN_BOX = ".aside_header"
 RETRY_BUTTON = ".btn_retry"
 POPUP_CLOSE = ".lst_btn_close"
 
+# ── PC 네이버 선택자 ───────────────────────────────────────
+# 로그인 영역. 로그아웃 상태면 이 안에 "로그인" 버튼 글자가 있다
+PC_ACCOUNT_BOX = "#account"
+# 네이버가 로그인하면 심는 쿠키. 화면 구조가 바뀌어도 이건 그대로다
+LOGIN_COOKIES = ("NID_AUT", "NID_SES")
+
 CAPTCHA_BOX = ".captcha_wrap"
 # "새로운 환경에서 로그인" 안내의 확인 버튼
 NEW_DEVICE_BUTTON = ".btn_white"
@@ -105,6 +111,55 @@ def logged_in(page: Page, timeout: float = 10.0) -> bool:
         if time.time() >= deadline:
             return False
         time.sleep(0.5)
+
+
+def logged_in_pc(context: BrowserContext, page: Page, log: LogFn = print, timeout: float = 8.0) -> bool:
+    """**PC 메인에서** 로그인 상태인지.
+
+    모바일로 바꾸기 전에 여기서 먼저 본다 — 이미 로그인돼 있으면 폰으로 바꿀 일도,
+    로그인할 일도 없다. 두 가지가 **같이** 맞아야 로그인으로 본다.
+
+    - **쿠키**: 로그인하면 `NID_AUT`·`NID_SES` 가 생긴다. 화면이 바뀌어도 그대로다.
+    - **로그인 영역**: 로그아웃이면 `#account` 안에 "로그인" 버튼이 있다.
+      쿠키만 남고 세션은 끊긴 경우를 이걸로 걸러낸다.
+
+    ⚠️ **둘 중 하나라도 아니면 로그인 안 된 것으로 본다.** 틀린 쪽으로 틀려야 하기
+    때문이다 — 아니라고 잘못 보면 로그인을 한 번 더 할 뿐이지만(그때 이미 되어 있으면
+    모바일에서 알아채고 넘어간다), 되었다고 잘못 보면 세션도 없이 글을 쓰러 간다.
+
+    ⚠️ **`#account` 는 늦게 그려진다.** 로드 직후에는 비어 있어서, 기다리지 않으면
+    "화면에 아무것도 없음" 으로 읽고 쿠키만 믿게 된다. 그래서 글자가 찰 때까지 본다.
+    """
+    deadline = time.time() + timeout
+    text = ""
+    while True:
+        try:
+            box = page.locator(PC_ACCOUNT_BOX).first
+            if box.count():
+                text = (box.inner_text(timeout=1500) or "").strip()
+        except Exception:
+            pass  # 아직 그리는 중
+        if text or time.time() >= deadline:
+            break
+        time.sleep(0.4)
+
+    try:
+        names = {c["name"] for c in context.cookies("https://www.naver.com")}
+    except Exception:
+        names = set()
+    cookie = all(name in names for name in LOGIN_COOKIES)
+    mark = "있음" if cookie else "없음"
+
+    if not text:
+        log(f"     PC 로그인 영역({PC_ACCOUNT_BOX})이 안 떴습니다. 쿠키로만 봅니다 ({mark})")
+        return cookie
+    if "로그인" in text and "로그아웃" not in text:
+        log(f"     PC 화면에 로그인 버튼이 보입니다 (쿠키 {mark})")
+        return False
+    if not cookie:
+        log(f"     PC 화면은 로그인한 모양인데 쿠키가 없습니다. 다시 로그인합니다")
+        return False
+    return True
 
 
 def _fill(page: Page, selector: str, value: str, log: LogFn) -> bool:
@@ -240,8 +295,13 @@ def login(
     human.focus_window(page)
     human.rest(1.5, 2.8)
 
+    # PC 에서 먼저 확인한다. 이미 들어가 있으면 폰으로 바꿀 일이 없다
+    if logged_in_pc(context, page, log):
+        log(f"  {account.login_id}: 이미 로그인되어 있음 (PC 에서 확인, 쿠키 유지)")
+        return OK
+
     # ── 2) 모바일로 변경 ────────────────────────────────
-    log(f"  {account.login_id}: 모바일 버전으로 바꿉니다")
+    log(f"  {account.login_id}: 로그인이 안 되어 있습니다. 모바일 버전으로 바꿉니다")
     to_mobile(context, page, mobile_agent)
     human.rest(1.0, 2.0)
     page.goto(MOBILE_HOME, wait_until="domcontentloaded")

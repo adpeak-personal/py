@@ -61,6 +61,7 @@ class App:
         self.stop_btn = tk.Button(run, text="중지", width=10, command=self.ask_stop, state="disabled")
         self.stop_btn.pack(side="left", padx=(8, 0))
         tk.Button(run, text="IP 확인", width=10, command=self.check_ip).pack(side="left", padx=(8, 0))
+        tk.Button(run, text="삭제 처리", width=10, command=self.clean).pack(side="left", padx=(8, 0))
         self.status = tk.Label(run, text="대기 중", anchor="w", fg="#666")
         self.status.pack(side="left", padx=(12, 0))
 
@@ -71,6 +72,8 @@ class App:
         self.root.after(100, self.drain)
         self.log("찍고에서 프로필을 받아옵니다…")
         self.load_profiles()
+        # 켤 때 '삭제 대기' 를 먼저 치운다 — 따로 누르지 않아도 되게
+        self.clean()
 
     # ── 로그 ───────────────────────────────────────────
     def log(self, line: str = "") -> None:
@@ -124,6 +127,26 @@ class App:
                 return
             self.root.after(0, lambda: self.profile.configure(values=[ALL, *names]))
             self.log(f"쓰는 프로필 {len(names)}개: {', '.join(names) or '(없음)'}")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def clean(self) -> None:
+        """'삭제 대기' 로 돌려 둔 프로필을 치운다.
+
+        창을 켤 때 한 번 저절로 돌고, '삭제 처리' 버튼으로도 돌릴 수 있다.
+        크롬이 떠 있어서 폴더가 잠겨 있으면 다음 번에 다시 지운다.
+        """
+        if self.worker:
+            return
+
+        def work() -> None:
+            run_login.say = self.log
+            try:
+                done = run_login.clean_only()
+                if done:
+                    self.root.after(0, self.load_profiles)  # 목록에서도 빠지게
+            except Exception as error:
+                self.log(f"삭제 처리에서 멈췄습니다. {type(error).__name__}: {error}")
 
         threading.Thread(target=work, daemon=True).start()
 
