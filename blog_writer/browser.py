@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -36,6 +37,59 @@ LAUNCH_ARGS = [
 ]
 
 
+def _ua_parts(ua: str) -> dict:
+    """UA 문자열에서 클라이언트 힌트에 넣을 값들을 뽑는다.
+
+    ⚠️ **UA 문자열만 바꾸면 들통난다.** 크로미움은 `navigator.userAgentData` 로
+    브랜드·버전·플랫폼·모바일 여부를 따로 알려주는데, Playwright 의 `user_agent` 는
+    그걸 안 건드린다. 실측으로 UA 는 "Android 14 폰" 이라면서 platform 은 Win32,
+    mobile 은 false, 브랜드는 Chromium 159 였다. 사이트에서 한눈에 보인다.
+    """
+    version = (re.search(r"Chrome/(\d+)", ua) or [None, "131"])[1]
+    full = (re.search(r"Chrome/([\d.]+)", ua) or [None, f"{version}.0.0.0"])[1]
+    android = re.search(r"Android (\d+)", ua)
+    model = re.search(r"Android [\d.]+; ([^)]+)\)", ua)
+    return {
+        "version": version,
+        "full": full,
+        "platform": "Android" if android else "Windows",
+        "platform_version": (android[1] if android else "10") + ".0.0",
+        "model": model[1].strip() if model else "",
+        "mobile": "Mobile" in ua,
+    }
+
+
+def _apply_ua(context: BrowserContext, page, ua: str) -> None:
+    """그 페이지의 UA 와 **클라이언트 힌트를 같이** 덮는다 (CDP)."""
+    part = _ua_parts(ua)
+    try:
+        cdp = context.new_cdp_session(page)
+        cdp.send(
+            "Emulation.setUserAgentOverride",
+            {
+                "userAgent": ua,
+                "acceptLanguage": "ko-KR,ko;q=0.9",
+                "platform": "Linux armv8l" if part["mobile"] else "Win32",
+                "userAgentMetadata": {
+                    "brands": [
+                        {"brand": "Not;A=Brand", "version": "99"},
+                        {"brand": "Google Chrome", "version": part["version"]},
+                        {"brand": "Chromium", "version": part["version"]},
+                    ],
+                    "fullVersion": part["full"],
+                    "platform": part["platform"],
+                    "platformVersion": part["platform_version"],
+                    "architecture": "",
+                    "model": part["model"],
+                    "mobile": part["mobile"],
+                },
+            },
+        )
+    except Exception:
+        # 못 덮어도 멈추지는 않는다 — UA 문자열만이라도 바뀐 채로 돈다
+        pass
+
+
 @contextmanager
 def launch(profile: Profile, account: Account, headless: bool = False):
     """그 아이디의 크롬 폴더를, 그 프로필의 IP 로 연다.
@@ -62,6 +116,12 @@ def launch(profile: Profile, account: Account, headless: bool = False):
             no_viewport=True,
         )
         context.add_init_script(STEALTH_JS)
+
+        # 이미 열린 탭과, 앞으로 열릴 탭 전부에 건다
+        for opened in context.pages:
+            _apply_ua(context, opened, profile.agent)
+        context.on("page", lambda pg: _apply_ua(context, pg, profile.agent))
+
         try:
             yield context
         finally:
