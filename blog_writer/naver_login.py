@@ -33,6 +33,15 @@ FAILED = "failed"  # 아이디/비번이 틀렸거나 막힌 계정
 
 # 보호조치 화면에만 뜨는 상자. 글자는 바뀌어도 이건 잘 안 바뀐다
 PROTECT_BOX = "#divWarning"
+
+# "새로운 기기에서 로그인되었습니다 — 등록하시겠습니까?" 화면의 [등록] 버튼.
+# ⚠️ `:text-is()` 로 **정확히 일치**하는 것만 고른다. 그냥 "등록" 으로 찾으면
+#    바로 아래 [등록안함] 도 같이 걸려서, 하필 그쪽을 누르면 다음에도 또 뜬다.
+REGISTER_BUTTON = (
+    "a:text-is('등록'), button:text-is('등록'), "
+    "input[value='등록'], span:text-is('등록')"
+)
+DEVICE_WORDS = ("새로운 기기", "기기를 등록", "자주 사용하는 기기")
 # 캡차·추가 확인 상자
 MESSAGE_BOX = ".message_wrap"
 
@@ -95,6 +104,37 @@ def _fill(page: Page, selector: str, value: str, log: LogFn) -> bool:
     return False
 
 
+def _register_device(page: Page, account: Account, log: LogFn) -> bool:
+    """"새로운 기기에서 로그인되었습니다" 화면이면 [등록] 을 누른다.
+
+    내 계정에 내 브라우저를 등록하는 화면이다. **한 번 등록해 두면 다음부터 안 뜬다.**
+    [등록안함] 을 누르면 로그인할 때마다 다시 뜨는데, 네이버 입장에선 매번 낯선 기기라
+    좋을 게 없다.
+
+    ⚠️ 프로필 폴더를 지우면 이 등록도 같이 날아간다 — 그 아이디로 다시 로그인할 때 또 뜬다.
+    """
+    try:
+        body = page.inner_text("body")[:2000]
+    except Exception:
+        return False
+    if not any(word in body for word in DEVICE_WORDS):
+        return False
+
+    button = page.locator(REGISTER_BUTTON).first
+    try:
+        if button.count() == 0:
+            return False
+    except Exception:
+        return False
+
+    log(f"  {account.login_id}: 새 기기 등록 화면입니다. [등록] 을 누릅니다")
+    human.rest(0.8, 1.6)
+    if not human.move_and_click(page, REGISTER_BUTTON, log):
+        button.click()
+    human.rest(1.0, 2.0)
+    return True
+
+
 def login(context: BrowserContext, account: Account, timeout: int = 15, log: LogFn = print) -> str:
     """OK / NEED_HUMAN / FAILED 중 하나를 돌려준다."""
     page = context.pages[0] if context.pages else context.new_page()
@@ -142,6 +182,11 @@ def login(context: BrowserContext, account: Account, timeout: int = 15, log: Log
 
     if logged_in(page, timeout=timeout):
         log(f"  {account.login_id}: 로그인 성공")
+        return OK
+
+    # 로그인은 됐는데 "새 기기 등록" 화면에서 멈춘 것일 수 있다
+    if _register_device(page, account, log) and logged_in(page, timeout=timeout):
+        log(f"  {account.login_id}: 로그인 성공 (기기 등록함)")
         return OK
 
     # 아직 로그인 페이지면 왜 막혔는지 화면 글자로 가늠한다
