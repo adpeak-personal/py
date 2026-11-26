@@ -23,6 +23,7 @@ import random
 import time
 
 import pyautogui
+import pygetwindow
 import pyperclip
 from playwright.sync_api import Page
 
@@ -103,8 +104,9 @@ def move_and_click(page: Page, selector: str, log=print) -> bool:
         duration=random.uniform(*MOVE_SECONDS),
         tween=pyautogui.easeInOutQuad,  # 출발·도착에서 느려지는 움직임
     )
-    time.sleep(random.uniform(0.08, 0.25))  # 누르기 전 아주 짧은 멈칫
+    time.sleep(random.uniform(0.15, 0.45))  # 누르기 전 멈칫
     pyautogui.click()
+    rest(0.3, 0.9)
     return True
 
 
@@ -113,16 +115,52 @@ def paste(text: str) -> None:
 
     한 글자씩 치면 간격이 고르고, 한글은 조합 과정이 또 달라서 티가 난다.
     사람도 비밀번호는 붙여넣는다.
+
+    ⚠️ **붙여넣기 전에 `ctrl+a` 로 칸을 비운다.** 칸에 뭔가 남아 있으면 뒤에 이어 붙어
+    비밀번호가 엉뚱해진다. 자동완성이나 앞선 시도가 남긴 글자가 실제로 들어간다.
+
+    동작 사이사이를 쉰다 — 복사·전체선택·붙여넣기가 한 호흡에 끝나면 사람 손이 아니다.
     """
     pyperclip.copy(text)
-    time.sleep(random.uniform(0.1, 0.3))
+    rest(0.3, 0.9)
+    pyautogui.hotkey("ctrl", "a")
+    rest(0.3, 0.9)
     pyautogui.hotkey("ctrl", "v")
+    rest(0.3, 0.9)
 
 
 def focus_window(page: Page) -> None:
-    """그 창을 맨 앞으로. 마우스를 움직이기 전에 반드시 부른다."""
+    """그 창을 맨 앞으로. **마우스를 움직이기 전에 반드시 부른다.**
+
+    ⚠️ `page.bring_to_front()` 만으로는 모자라다 — 그건 크로미움 **안에서 탭만** 올린다.
+    다른 프로그램 창이 앞에 있으면 클릭이 그쪽에 꽂힌다. 운영체제에게도 시켜야 한다.
+    """
     try:
         page.bring_to_front()
     except Exception:
         pass
-    time.sleep(random.uniform(0.4, 0.8))
+
+    # 창 제목은 "<페이지 제목> - Chromium" 꼴이다. 제목 앞부분으로 찾는다
+    try:
+        title = (page.title() or "").strip()
+        for window in pygetwindow.getAllWindows():
+            if title and title[:30] in window.title:
+                if window.isMinimized:
+                    window.restore()
+                window.activate()
+                break
+    except Exception:
+        # 창을 못 찾아도 멈추지 않는다 — 좌표가 화면 밖이면 어차피 클릭을 안 한다
+        pass
+    rest(0.5, 1.1)
+
+
+def call_human() -> None:
+    """사람을 부른다. 창을 보고 있지 않을 때 쓰라고 소리를 낸다."""
+    try:
+        import winsound
+
+        for _ in range(3):
+            winsound.Beep(1600, 400)
+    except Exception:
+        pass
