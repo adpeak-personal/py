@@ -49,7 +49,8 @@ class App:
         tk.Button(bar, text="목록 새로고침", command=self.load_profiles).pack(side="left")
 
         self.shot = tk.BooleanVar(value=False)
-        self.keep = tk.BooleanVar(value=False)
+        # 로그인이 끝나면 창을 띄워 기다린다. 만드는 중에는 켜 두는 게 낫다
+        self.keep = tk.BooleanVar(value=True)
         tk.Checkbutton(bar, text="화면 남기기", variable=self.shot).pack(side="left", padx=(12, 0))
         tk.Checkbutton(bar, text="창 열어두기", variable=self.keep).pack(side="left")
 

@@ -13,7 +13,7 @@
     python run_login.py                # 프로필 전부 (하나씩, VPN 바꿔 가며)
     python run_login.py prof-01        # 그 프로필만
     python run_login.py prof-01 --shot # 성공해도 화면을 shots/ 에 남긴다
-    python run_login.py prof-01 --keep # 창을 닫지 않고 Ctrl+C 까지 기다린다
+    python run_login.py prof-01 --no-keep  # 안 멈추고 줄줄이 돌린다
 """
 from __future__ import annotations
 
@@ -75,28 +75,38 @@ def current_ip(profile: Profile, settings: Settings) -> str | None:
 
 
 def hold(label: str) -> None:
-    """창을 띄워 둔 채 기다린다. Ctrl+C 를 누르면 닫고 다음으로 간다.
+    """작업을 멈추고 **창을 띄워** 기다린다.
 
-    에디터 화면을 눈으로 들여다볼 때 쓴다. 안 쓰면 작업이 끝나는 즉시 창이 닫힌다.
+    로그인이 끝난 화면을 눈으로 보라고 두는 자리다. 터미널에서는 `pyautogui.alert`,
+    화면(`gui.py`)에서는 그쪽 창이 뜬다 — 어느 쪽이든 확인을 눌러야 다음으로 간다.
+
+    ⚠️ Ctrl+C 로 기다리게 하지 않는다. GUI 에는 Ctrl+C 가 없고, 터미널에서도
+    "멈춘 건지 기다리는 건지" 구분이 안 됐다.
     """
     say("     ---------------------------------------------------")
     say(f"     {label} 창을 열어 둡니다. 눈으로 확인하세요.")
-    say("     이 터미널에서 Ctrl+C 를 누르면 창을 닫고 다음으로 갑니다.")
+    say("     확인을 누르면 창을 닫고 다음으로 갑니다.")
     say("     ---------------------------------------------------")
-    try:
-        if stop_flag is not None:
-            # GUI 에서는 Ctrl+C 가 없다. 중지 버튼이나 '확인' 으로 빠져나온다
-            ask("     창을 다 보셨으면 확인을 누르세요")
-        else:
-            while True:
-                time.sleep(1)
-    except KeyboardInterrupt:
-        say("")
+
+    if stop_flag is not None:
+        # 화면에서 돌 때는 GUI 가 끼워 준 물음 창이 뜬다
+        ask(f"{label} 창을 다 보셨으면 확인을 누르세요")
+    else:
+        try:
+            import pyautogui
+
+            pyautogui.alert(
+                text=f"{label} 로그인 화면을 확인하세요." + chr(10) + "확인을 누르면 창을 닫습니다.",
+                title="블로그 작업기",
+            )
+        except Exception:
+            # 창을 못 띄우면 터미널로 묻는다
+            ask("     확인을 마쳤으면 Enter: ")
     say("     창을 닫습니다")
 
 
 def run_account(
-    profile: Profile, account: Account, settings: Settings, api: Zzikko, shot: bool = False, keep: bool = False
+    profile: Profile, account: Account, settings: Settings, api: Zzikko, shot: bool = False, keep: bool = True
 ) -> str:
     say(f"  {account.login_id}: 크롬 창을 엽니다...")
     with launch(profile, account, headless=settings.headless) as context:
@@ -140,7 +150,7 @@ def run_account(
 
 
 def run_profile(
-    profile: Profile, settings: Settings, api: Zzikko, tally: dict[str, int], shot: bool = False, keep: bool = False
+    profile: Profile, settings: Settings, api: Zzikko, tally: dict[str, int], shot: bool = False, keep: bool = True
 ) -> None:
     say("")
     say(f"[{profile.name}] 아이디 {len(profile.accounts)}개")
@@ -226,7 +236,7 @@ def clean_pending(api: Zzikko) -> None:
             say(f"  {name}: 목록에서 지우지 못했습니다. {error}")
 
 
-def run(only: str | None = None, shot: bool = False, keep: bool = False) -> int:
+def run(only: str | None = None, shot: bool = False, keep: bool = True) -> int:
     """실제로 도는 몸통. 터미널(`main`)과 화면(`gui.py`)이 같이 쓴다."""
 
     try:
@@ -284,14 +294,14 @@ def run(only: str | None = None, shot: bool = False, keep: bool = False) -> int:
 
 def main() -> int:
     """터미널에서 들어오는 자리. 옵션만 읽어 `run` 에 넘긴다."""
-    options = {"--shot", "--keep"}
+    options = {"--shot", "--keep", "--no-keep"}
     args = [a for a in sys.argv[1:] if a not in options]
     return run(
         only=args[0] if args else None,
         # --shot 을 붙이면 성공했을 때도 화면을 남긴다 (문제를 같이 들여다볼 때)
         shot="--shot" in sys.argv,
-        # --keep 을 붙이면 창을 닫지 않고 기다린다
-        keep="--keep" in sys.argv,
+        # 로그인이 끝나면 창을 띄워 기다린다. 줄줄이 돌리고 싶으면 --no-keep
+        keep="--no-keep" not in sys.argv,
     )
 
 
